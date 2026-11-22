@@ -1,0 +1,19 @@
+Metadata-Version: 2.4
+Name: phototheque
+Version: 0.5.0
+Summary: Gestionnaire de photos non destructif, compatible Picasa (FR/EN)
+Requires-Python: >=3.10
+Requires-Dist: fastapi>=0.110
+Requires-Dist: uvicorn>=0.29
+Requires-Dist: pillow>=10.0
+Requires-Dist: defusedxml>=0.7
+Requires-Dist: numpy>=1.26
+Requires-Dist: opencv-python-headless>=4.8
+Requires-Dist: onnxruntime>=1.17
+Requires-Dist: tokenizers>=0.15
+Requires-Dist: watchdog>=4.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Requires-Dist: httpx>=0.27; extra == "dev"
+Requires-Dist: onnx>=1.15; extra == "dev"
+Requires-Dist: scikit-image>=0.22; extra == "dev"

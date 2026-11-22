@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="fr" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Photothèque</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect x=%221%22 y=%223%22 width=%2214%22 height=%2210%22 rx=%222%22 fill=%22%230d6efd%22/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/vendor/bootstrap/bootstrap.min.css">
+  <link rel="stylesheet" href="/static/vendor/bootstrap-icons/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<nav class="navbar navbar-expand bg-body-tertiary border-bottom px-3 py-2 gap-3">
+  <span class="navbar-brand fw-semibold mb-0"><i class="bi bi-images me-2"></i><span data-i18n="app.title">Photothèque</span></span>
+  <div class="input-group input-group-sm flex-grow-1" style="max-width:460px">
+    <input id="search" class="form-control" type="search" data-i18n-placeholder="search.placeholder">
+    <button class="btn btn-outline-secondary" id="btnSemantic" data-i18n-title="search.semantic"><i class="bi bi-stars"></i></button>
+  </div>
+  <span id="aiBadge" class="badge rounded-pill text-bg-info d-none" role="button"></span>
+  <span id="scanStatus" class="small text-body-secondary d-none"><span class="spinner-border spinner-border-sm me-1"></span><span></span></span>
+  <div class="ms-auto d-flex gap-2 align-items-center">
+    <button id="btnScan" class="btn btn-sm btn-outline-secondary" data-i18n-title="scan.button"><i class="bi bi-arrow-repeat"></i></button>
+    <button id="btnTheme" class="btn btn-sm btn-outline-secondary" data-i18n-title="theme.toggle"><i class="bi bi-circle-half"></i></button>
+    <div class="btn-group btn-group-sm" role="group">
+      <button class="btn btn-outline-secondary lang-btn" data-lang="fr">FR</button>
+      <button class="btn btn-outline-secondary lang-btn" data-lang="en">EN</button>
+    </div>
+    <button id="btnSettings" class="btn btn-sm btn-outline-secondary" data-i18n-title="settings.title"><i class="bi bi-gear"></i></button>
+  </div>
+</nav>
+
+<div class="app-body">
+  <aside class="sidebar border-end">
+    <ul class="nav nav-tabs nav-fill small" id="sideTabs">
+      <li class="nav-item"><button class="nav-link active" data-tab="folders"><i class="bi bi-folder2"></i><br><span data-i18n="nav.folders"></span></button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="dates"><i class="bi bi-calendar3"></i><br><span data-i18n="nav.dates"></span></button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="tags"><i class="bi bi-tags"></i><br><span data-i18n="nav.tags"></span></button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="albums"><i class="bi bi-collection"></i><br><span data-i18n="nav.albums"></span></button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="faces"><i class="bi bi-people"></i><br><span data-i18n="nav.faces"></span></button></li>
+    </ul>
+    <div class="side-quick border-bottom">
+      <a href="#" class="side-item" data-view='{"type":"all"}'><i class="bi bi-grid-3x3-gap"></i> <span data-i18n="nav.all"></span></a>
+      <a href="#" class="side-item" data-view='{"type":"starred"}'><i class="bi bi-star"></i> <span data-i18n="nav.starred"></span></a>
+    </div>
+    <div class="side-panel" id="panel-folders"></div>
+    <div class="side-panel d-none" id="panel-dates"></div>
+    <div class="side-panel d-none" id="panel-tags"></div>
+    <div class="side-panel d-none" id="panel-albums"></div>
+    <div class="side-panel d-none" id="panel-faces"></div>
+  </aside>
+
+  <main class="content">
+    <div class="toolbar border-bottom px-3 py-2 d-flex align-items-center gap-3 flex-wrap">
+      <h1 id="viewTitle" class="h6 mb-0 text-truncate"></h1>
+      <span id="viewCount" class="small text-body-secondary"></span>
+      <div class="form-check form-switch small mb-0 d-none" id="subfoldersWrap">
+        <input class="form-check-input" type="checkbox" id="subfolders" checked>
+        <label class="form-check-label" for="subfolders" data-i18n="view.subfolders"></label>
+      </div>
+      <form id="clusterForm" class="d-none d-flex gap-1 align-items-center">
+        <input class="form-control form-control-sm" id="clusterName" style="width:200px" data-i18n-placeholder="faces.namePlaceholder">
+        <button class="btn btn-sm btn-primary" type="submit" data-i18n="faces.name"></button>
+        <button class="btn btn-sm btn-outline-danger" type="button" id="clusterDelete" data-i18n-title="faces.delete"><i class="bi bi-trash"></i></button>
+        <i class="bi bi-info-circle text-body-secondary" data-i18n-title="faces.hint"></i>
+      </form>
+      <button class="btn btn-sm btn-outline-secondary" id="btnSlideshow"><i class="bi bi-play-circle"></i> <span data-i18n="slideshow.start"></span></button>
+      <div id="selectionBar" class="ms-auto d-flex gap-2 align-items-center d-none">
+        <span id="selCount" class="small fw-semibold"></span>
+        <button class="btn btn-sm btn-outline-primary" id="selTag"><i class="bi bi-tag"></i> <span data-i18n="sel.tag"></span></button>
+        <button class="btn btn-sm btn-outline-primary" id="selAlbum"><i class="bi bi-collection"></i> <span data-i18n="sel.toAlbum"></span></button>
+        <button class="btn btn-sm btn-outline-danger d-none" id="selFromAlbum"><i class="bi bi-x-circle"></i> <span data-i18n="sel.fromAlbum"></span></button>
+        <button class="btn btn-sm btn-link" id="selNone" data-i18n="sel.none"></button>
+      </div>
+      <button class="btn btn-sm btn-link ms-auto" id="selAll" data-i18n="sel.all"></button>
+    </div>
+    <div id="grid" class="grid"></div>
+    <div id="sentinel"></div>
+    <p id="empty" class="text-center text-body-secondary mt-5 d-none" data-i18n="view.empty"></p>
+  </main>
+</div>
+
+<!-- Visionneuse / retouche -->
+<div class="modal fade" id="viewer" tabindex="-1">
+  <div class="modal-dialog modal-fullscreen">
+    <div class="modal-content viewer">
+      <div class="viewer-stage">
+        <button class="btn btn-dark viewer-nav prev" id="vPrev"><i class="bi bi-chevron-left"></i></button>
+        <div class="viewer-imgwrap" id="vWrap">
+          <img id="vImg" alt="" data-i18n-title="viewer.zoomHint">
+          <div class="straighten-grid d-none" id="vGrid"></div>
+          <div class="crop-box d-none" id="vCrop"></div>
+          <div class="viewer-loading d-none" id="vLoading"><div class="spinner-border text-light"></div></div>
+          <button class="img-overlay-btn" id="vFull" data-i18n-title="viewer.fullscreen"><i class="bi bi-arrows-fullscreen"></i></button>
+          <!-- Barre du diaporama, en filigrane sur le bas de la photo -->
+          <div class="slideshow-bar" id="ssBar">
+            <button class="btn btn-sm btn-dark" id="ssPrev"><i class="bi bi-skip-backward-fill"></i></button>
+            <button class="btn btn-sm btn-dark" id="ssToggle" data-i18n-title="slideshow.start"><i class="bi bi-play-fill"></i></button>
+            <button class="btn btn-sm btn-dark" id="ssNext"><i class="bi bi-skip-forward-fill"></i></button>
+            <select class="form-select form-select-sm bg-dark text-light border-secondary" id="ssInterval" style="width:auto" data-i18n-title="slideshow.interval">
+              <option value="2">2 s</option><option value="3">3 s</option><option value="5">5 s</option><option value="8">8 s</option><option value="12">12 s</option><option value="20">20 s</option>
+            </select>
+            <button class="btn btn-sm btn-dark ss-only" id="ssExit" data-i18n-title="slideshow.exit"><i class="bi bi-fullscreen-exit"></i></button>
+          </div>
+        </div>
+        <button class="btn btn-dark viewer-nav next" id="vNext"><i class="bi bi-chevron-right"></i></button>
+        <button class="btn btn-dark viewer-close" data-bs-dismiss="modal"><i class="bi bi-x-lg"></i></button>
+      </div>
+      <div class="viewer-side">
+       <div class="viewer-side-body">
+        <div class="d-flex align-items-center gap-2 mb-2">
+          <button class="btn btn-sm btn-link p-0 fs-5" id="vStar"><i class="bi bi-star"></i></button>
+          <h2 class="h6 mb-0 text-truncate" id="vName"></h2>
+          <span class="picasa-missing d-none" id="vPicasaMissing" data-i18n-title="viewer.picasaMissing"><i class="bi bi-p-square"></i><i class="bi bi-exclamation"></i></span>
+        </div>
+        <div class="small text-body-secondary mb-3" id="vMeta"></div>
+
+        <label class="form-label small fw-semibold" data-i18n="viewer.caption"></label>
+        <input class="form-control form-control-sm mb-3" id="vCaption">
+
+        <div class="small fw-semibold mb-1" data-i18n="viewer.tags"></div>
+        <div id="vTags" class="mb-2"></div>
+        <input class="form-control form-control-sm mb-3" id="vTagInput" list="tagList" data-i18n-placeholder="viewer.addTag">
+        <datalist id="tagList"></datalist>
+
+        <div class="small fw-semibold mb-1" data-i18n="viewer.albums"></div>
+        <div id="vAlbums" class="mb-3 small"></div>
+        <button class="btn btn-sm btn-outline-secondary w-100 mb-2 d-none" id="vSimilar"><i class="bi bi-images"></i> <span data-i18n="viewer.similar"></span></button>
+
+        <hr>
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <span class="small fw-semibold" data-i18n="viewer.edit"></span>
+          <span class="badge text-bg-light" id="vSource"></span>
+        </div>
+        <div class="small text-warning-emphasis mb-2 d-none" id="vUnsupported"></div>
+
+        <div class="btn-group btn-group-sm w-100 mb-3">
+          <button class="btn btn-outline-secondary" id="eRotL" data-i18n-title="viewer.rotateLeft"><i class="bi bi-arrow-counterclockwise"></i></button>
+          <button class="btn btn-outline-secondary" id="eRotR" data-i18n-title="viewer.rotateRight"><i class="bi bi-arrow-clockwise"></i></button>
+          <button class="btn btn-outline-secondary" id="eCrop"><i class="bi bi-crop"></i> <span data-i18n="viewer.cropTool"></span></button>
+          <button class="btn btn-outline-secondary" id="eCropRemove" data-i18n-title="viewer.cropRemove"><i class="bi bi-bounding-box-circles"></i></button>
+        </div>
+        <button class="btn btn-sm btn-primary w-100 mb-3 d-none" id="eCropApply" data-i18n="viewer.cropApply"></button>
+
+        <label class="form-label small d-flex justify-content-between mb-0">
+          <span data-i18n="viewer.straighten"></span><span id="eStraightenVal">0°</span>
+        </label>
+        <input type="range" class="form-range" id="eStraighten" min="-15" max="15" step="0.1" value="0">
+
+        <div class="small fw-semibold mt-2 mb-1" data-i18n="viewer.perspective"></div>
+        <button class="btn btn-sm btn-outline-primary w-100 mb-1" id="eDetect"><i class="bi bi-building"></i> <span data-i18n="viewer.detect"></span></button>
+        <div class="small text-body-secondary mb-1" id="ePerspInfo"></div>
+        <div id="ePerspCtl" class="d-none">
+          <label class="form-label small d-flex justify-content-between mb-0">
+            <span data-i18n="viewer.strength"></span><span id="eStrengthVal"></span>
+          </label>
+          <input type="range" class="form-range" id="eStrength" min="0" max="100" step="5">
+          <button class="btn btn-sm btn-link p-0 small" id="ePerspRemove" data-i18n="viewer.perspectiveRemove"></button>
+        </div>
+
+        <div class="d-flex gap-1 mt-3 mb-1">
+          <button class="btn btn-sm btn-outline-primary flex-grow-1" id="eEnhance" data-i18n-title="viewer.autoenhanceHelp"><i class="bi bi-magic"></i> <span data-i18n="viewer.autoenhance"></span></button>
+          <button class="btn btn-sm btn-outline-secondary" id="eCompare" data-i18n-title="viewer.compareHelp"><i class="bi bi-layout-split"></i> <span data-i18n="viewer.compare"></span></button>
+        </div>
+        <div id="eEnhanceCtl" class="d-none">
+          <label class="form-label small d-flex justify-content-between mb-0">
+            <span data-i18n="viewer.strength"></span><span id="eEnhanceVal"></span>
+          </label>
+          <input type="range" class="form-range" id="eEnhanceStrength" min="0" max="150" step="5">
+        </div>
+
+        <div class="small fw-semibold mt-3 mb-1" data-i18n="viewer.effects"></div>
+        <div id="eEffects" class="d-flex flex-wrap gap-1 mb-3"></div>
+
+        <div class="d-grid gap-2">
+          <div class="btn-group btn-group-sm">
+            <button class="btn btn-outline-secondary" id="ePicasa" data-i18n="viewer.backToPicasa"></button>
+            <button class="btn btn-outline-secondary" id="eReset" data-i18n="viewer.resetAll"></button>
+          </div>
+          <div class="btn-group btn-group-sm">
+            <a class="btn btn-outline-secondary" id="eExport"><i class="bi bi-download"></i> <span data-i18n="viewer.export"></span></a>
+            <a class="btn btn-outline-secondary" id="eOriginal" target="_blank"><i class="bi bi-file-earmark-image"></i> <span data-i18n="viewer.original"></span></a>
+          </div>
+        </div>
+       </div>
+       <!-- Toujours visible, quelle que soit la position du défilement -->
+       <div class="viewer-side-footer">
+          <div class="small text-warning-emphasis d-none mb-1" id="vDirty" data-i18n="viewer.unsaved"></div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-success flex-grow-1" id="eSave" data-i18n="viewer.save"></button>
+            <button class="btn btn-sm btn-outline-secondary" id="eDiscard" data-i18n="viewer.discard"></button>
+          </div>
+       </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Réglages -->
+<div class="modal fade" id="settings" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title" data-i18n="settings.title"></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <h6 data-i18n="settings.roots"></h6>
+        <ul class="list-group mb-2" id="sRoots"></ul>
+        <div class="input-group input-group-sm mb-4">
+          <input class="form-control" id="sRootInput" data-i18n-placeholder="settings.rootPlaceholder">
+          <button class="btn btn-outline-primary" id="sRootAdd" data-i18n="settings.addRoot"></button>
+        </div>
+        <h6 data-i18n="settings.excluded"></h6>
+        <ul class="list-group mb-2" id="sExcluded"></ul>
+        <div class="form-check mt-3"><input class="form-check-input" type="checkbox" id="sWatch">
+          <label class="form-check-label small" for="sWatch" data-i18n="settings.watch"></label></div>
+        <div class="form-text mb-4" data-i18n="settings.watchHelp"></div>
+        <h6 data-i18n="settings.display"></h6>
+        <div class="row g-3 mb-4">
+          <div class="col-md-6">
+            <label class="form-label small" data-i18n="settings.theme"></label>
+            <select class="form-select form-select-sm" id="sTheme">
+              <option value="auto" data-i18n="theme.auto"></option><option value="light" data-i18n="theme.light"></option><option value="dark" data-i18n="theme.dark"></option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small" data-i18n="slideshow.interval"></label>
+            <input type="number" min="1" max="120" step="1" class="form-control form-control-sm" id="sInterval">
+          </div>
+        </div>
+        <h6 data-i18n="settings.cache"></h6>
+        <div class="row g-2 align-items-end mb-1">
+          <div class="col-md-4"><label class="form-label small" data-i18n="settings.cacheMax"></label>
+            <input type="number" min="1" max="2000" step="1" class="form-control form-control-sm" id="sCacheMax"></div>
+          <div class="col-md-8"><button class="btn btn-sm btn-outline-secondary" id="sCacheClear" data-i18n="settings.cacheClear"></button></div>
+        </div>
+        <div class="small" id="sCacheUsage"></div>
+        <div class="form-text mb-4" data-i18n="settings.cacheHelp"></div>
+        <h6 data-i18n="settings.picasa"></h6>
+        <div class="form-check mb-1">
+          <input class="form-check-input" type="checkbox" id="sRotateCw"><label class="form-check-label small" for="sRotateCw" data-i18n="settings.rotateCw"></label>
+        </div>
+        <div class="form-text mb-3" data-i18n="settings.rotateHelp"></div>
+        <div class="row g-3 mb-4">
+          <div class="col-md-6">
+            <label class="form-label small" data-i18n="settings.tilt"></label>
+            <div class="input-group input-group-sm">
+              <input type="number" step="0.0001" class="form-control" id="sTilt">
+              <button class="btn btn-outline-secondary" id="sCalibrate" data-i18n="settings.calibrate"></button>
+            </div>
+            <div class="form-text" data-i18n="settings.tiltHelp"></div>
+            <div class="small mt-1" id="sCalibResult"></div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small" data-i18n="settings.autoTags"></label>
+            <input class="form-control form-control-sm" id="sAutoTags">
+            <div class="form-text mb-2" data-i18n="settings.autoTagsHelp"></div>
+            <label class="form-label small" data-i18n="settings.enhanceStrength"></label>
+            <input type="number" min="0" max="150" step="5" class="form-control form-control-sm mb-2" id="sEnhanceStrength">
+            <label class="form-label small" data-i18n="settings.strength"></label>
+            <input type="number" min="0" max="1" step="0.05" class="form-control form-control-sm mb-2" id="sStrength">
+            <label class="form-label small" data-i18n="settings.f35"></label>
+            <input type="number" min="8" max="400" step="1" class="form-control form-control-sm" id="sF35">
+          </div>
+        </div>
+        <h6 data-i18n="settings.ai"></h6>
+        <div class="form-check"><input class="form-check-input" type="checkbox" id="sAiClip">
+          <label class="form-check-label small" for="sAiClip" data-i18n="settings.aiClip"></label> <span class="small" id="sClipState"></span></div>
+        <div class="form-check mb-2"><input class="form-check-input" type="checkbox" id="sAiFaces">
+          <label class="form-check-label small" for="sAiFaces" data-i18n="settings.aiFaces"></label> <span class="small" id="sFacesState"></span></div>
+        <div class="row g-3">
+          <div class="col-md-4"><label class="form-label small" data-i18n="settings.faceModel"></label>
+            <select class="form-select form-select-sm" id="sFaceModel"><option value="buffalo_l" data-i18n="settings.faceModelL"></option><option value="buffalo_s" data-i18n="settings.faceModelS"></option></select></div>
+          <div class="col-md-4"><label class="form-label small" data-i18n="settings.tagLang"></label>
+            <select class="form-select form-select-sm" id="sTagLang"><option value="fr">Français</option><option value="en">English</option></select></div>
+          <div class="col-md-4"><label class="form-label small" data-i18n="settings.tagThreshold"></label>
+            <input type="number" min="0" max="1" step="0.01" class="form-control form-control-sm" id="sTagThreshold"></div>
+        </div>
+        <div class="form-text" data-i18n="settings.aiLicense"></div>
+        <div class="small mt-2"><span class="fw-semibold" data-i18n="ai.queue"></span> : <span id="sQueue"></span>
+          <button class="btn btn-sm btn-link p-0 ms-2" id="sRetry" data-i18n="ai.retry"></button></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal" data-i18n="common.close"></button>
+        <button class="btn btn-primary btn-sm" id="sSave" data-i18n="settings.save"></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Choix d'un album -->
+<div class="modal fade" id="albumPicker" tabindex="-1">
+  <div class="modal-dialog modal-sm modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title h6" data-i18n="prompt.chooseAlbum"></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="list-group list-group-flush" id="albumPickerList"></div>
+      <div class="modal-footer"><button class="btn btn-sm btn-outline-primary w-100" id="albumPickerNew"><i class="bi bi-plus"></i> <span data-i18n="nav.newAlbum"></span></button></div>
+    </div>
+  </div>
+</div>
+
+<!-- Petite fenêtre de confirmation / saisie (remplace confirm() et prompt()) -->
+<div class="modal fade" id="dialog" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header py-2"><h5 class="modal-title h6" id="dlgTitle"></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body small">
+        <div id="dlgBody"></div>
+        <input class="form-control form-control-sm mt-2 d-none" id="dlgInput">
+      </div>
+      <div class="modal-footer py-2">
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal" data-i18n="common.cancel"></button>
+        <button class="btn btn-sm btn-primary" id="dlgOk" data-i18n="common.ok"></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast-container position-fixed bottom-0 end-0 p-3">
+  <div id="toast" class="toast align-items-center text-bg-dark border-0"><div class="d-flex"><div class="toast-body"></div>
+    <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div></div>
+</div>
+
+<script src="/static/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
