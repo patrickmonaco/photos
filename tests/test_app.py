@@ -202,7 +202,7 @@ def test_picasa_name_matching(env):
     det = c.get(f"/api/photos/{pid(c, 'IMG_X.JPG')}").json()
     assert det["ops"][0] == {"op": "rotate90", "n": 2}
     assert det["ops"][1]["deg"] == 3.0          # tilt Picasa -0,3 -> +3°
-    assert det["picasa"] == {"ini": True, "found": True, "section": "img_x.jpg"}
+    assert det["picasa"] == {"ini": True, "found": True, "section": "img_x.jpg", "directives": ["rotate", "straighten"]}
 
 
 def test_exclude_and_include_folder(env):
@@ -349,3 +349,42 @@ def test_recursive_folder_view(env):
     assert folders == sorted(folders)                 # regroupées par sous-dossier
     sub = c.get("/api/photos", params={"root": root, "folder": "2021", "recursive": "true"}).json()
     assert sub["total"] == 2 and {i["folder"] for i in sub["items"]} == {"2021/Noël"}
+
+
+MEDIA = Path("/tmp/mediatest")
+
+
+@pytest.mark.skipif(not (MEDIA / "clip.mp4").exists(), reason="fichiers vidéo de test absents")
+def test_videos_and_heic(env):
+    c, lib, library = env
+    d = lib / "Vidéos"
+    d.mkdir()
+    for f in ("clip.mp4", "old.avi", "rotated90.mp4", "photo.heic"):
+        shutil.copy(MEDIA / f, d / f)
+    before = {f: md5(d / f) for f in ("clip.mp4", "old.avi")}
+    library.scan_all()
+    items = c.get("/api/photos", params={"root": str(lib), "folder": "Vidéos"}).json()["items"]
+    by = {i["filename"]: i for i in items}
+    assert by["clip.mp4"]["media"] == "video" and by["clip.mp4"]["duration"] > 2
+    assert by["clip.mp4"]["taken_at"].startswith("2018-08-05")
+    assert by["photo.heic"]["media"] == "image"
+    rot = by["rotated90.mp4"]
+    assert (rot["width"], rot["height"]) == (640, 480)   # codée 480x640 + rotation : dimensions affichées
+    im = Image.open(io.BytesIO(c.get(f"/api/photos/{rot['id']}/thumb").content))
+    assert im.width > im.height                   # vignette tournée comme à la lecture
+    # Vignettes (une image de la vidéo) et aperçu HEIC
+    for name in ("clip.mp4", "old.avi", "photo.heic"):
+        r = c.get(f"/api/photos/{by[name]['id']}/thumb")
+        assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    # MP4 servi tel quel (avec Range), AVI converti en MP4 en cache
+    vid = by["clip.mp4"]["id"]
+    r = c.get(f"/api/photos/{vid}/video", headers={"Range": "bytes=0-99"})
+    assert r.status_code == 206 and len(r.content) == 100
+    det = c.get(f"/api/photos/{by['old.avi']['id']}").json()
+    assert det["video"]["playable"] is False
+    r = c.get(f"/api/photos/{by['old.avi']['id']}/video")
+    assert r.status_code == 200 and r.content[4:8] == b"ftyp"
+    assert c.get("/api/cache").json()["video"]["files"] == 1
+    # Export d'une vidéo = l'original
+    assert c.get(f"/api/photos/{vid}/export").content == (d / "clip.mp4").read_bytes()
+    assert {f: md5(d / f) for f in before} == before

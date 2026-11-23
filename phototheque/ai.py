@@ -60,16 +60,10 @@ def _session(path: Path):
     return ort.InferenceSession(str(path), sess_options=opts, providers=providers)
 
 
-def load_rgb(path: Path, max_side: int) -> Image.Image:
-    """Image orientée (EXIF) et réduite, en RGB."""
-    with Image.open(path) as im:
-        if im.format == "JPEG":
-            w, h = im.size
-            s = max_side / max(w, h)
-            if s < 1:
-                im.draft("RGB", (max(1, int(w * s)), max(1, int(h * s))))
-        im.load()
-        im = ImageOps.exif_transpose(im).convert("RGB")
+def load_rgb(path: Path, max_side: int, duration: float | None = None) -> Image.Image:
+    """Image orientée et réduite, en RGB (HEIC, RAW, et une image extraite pour les vidéos)."""
+    from . import media
+    im = media.open_image(path, max_side, duration)
     im.thumbnail((max_side, max_side), Image.BILINEAR)
     return im
 
@@ -103,7 +97,8 @@ class ModelManager:
     def _fetch(self, url: str, target: Path, key: str) -> None:
         tmp = target.with_suffix(target.suffix + ".part")
         req = urllib.request.Request(url, headers={"User-Agent": "phototheque"})
-        with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
+        from .plantnet import ssl_context
+        with urllib.request.urlopen(req, timeout=60, context=ssl_context()) as r, open(tmp, "wb") as f:
             while chunk := r.read(1 << 20):
                 f.write(chunk)
                 self.progress[key]["done_mb"] += len(chunk) / (1 << 20)

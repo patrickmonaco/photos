@@ -2,13 +2,22 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
+import shutil
+import re
 import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 DEFAULT_DATA_DIR = Path(os.environ.get("PHOTOTHEQUE_DATA", Path.home() / ".phototheque"))
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp", ".gif"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp", ".gif",
+                    ".heic", ".heif",                                              # HEIC (iPhone...)
+                    ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".srf", ".sr2", ".dng",  # RAW
+                    ".orf", ".rw2", ".raf", ".pef", ".srw"}
+VIDEO_EXTENSIONS = {".mp4", ".m4v", ".mov", ".avi", ".mkv", ".3gp", ".mts", ".m2ts", ".wmv", ".mpg", ".mpeg", ".webm"}
+MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
 
 # Nom du fichier de directives écrit dans chaque dossier de photos.
 SIDECAR_NAME = ".phototheque.json"
@@ -52,6 +61,12 @@ class Settings:
     face_model: str = "buffalo_l"  # "buffalo_l" (précis) ou "buffalo_s" (léger)
     face_cluster_threshold: float = 0.48  # similarité cosinus pour regrouper deux visages
     # Version du format des réglages (migrations).
+    # Pl@ntNet : identification des plantes (clé personnelle, quota journalier du plan gratuit)
+    plantnet_key: str = ""
+    plantnet_tags: list[str] = field(default_factory=lambda: ["fleur", "plante", "arbre"])
+    plantnet_daily_max: int = 500
+    plantnet_lang: str = ""            # vide = langue de l'interface
+    plantnet_min_score: float = 0.2    # en dessous, pas de légende (résultat incertain)
     settings_version: int = 3
 
 
@@ -70,7 +85,7 @@ class Config:
 
     def _load(self) -> Settings:
         if self.settings_path.exists():
-            raw = json.loads(self.settings_path.read_text(encoding="utf-8"))
+            raw = self._read_settings_file()
             known = {k: v for k, v in raw.items() if k in Settings.__dataclass_fields__}
             settings = Settings(**known)
             version = raw.get("settings_version", 1)
@@ -80,12 +95,46 @@ class Config:
             if version < 3:
                 # v0.3 : le signe du tilt Picasa est géré par la formule ; le facteur est une amplitude.
                 settings.picasa_tilt_deg_per_unit = abs(settings.picasa_tilt_deg_per_unit)
-            if version < Settings.settings_version:
+            if version < Settings.settings_version or getattr(self, "_repaired", False):
                 settings.settings_version = Settings.settings_version
                 self.settings = settings
                 self.save()
             return settings
         return Settings()
+
+    def _read_settings_file(self) -> dict:
+        """Lit settings.json. S'il est abîmé (modification à la main, par exemple « 0,5 » ou « .5 »
+        au lieu de « 0.5 »), on ne bloque pas le démarrage : les réglages lisibles sont repris,
+        les autres reviennent à leur valeur par défaut, et le fichier abîmé est conservé à côté."""
+        text = self.settings_path.read_text(encoding="utf-8-sig")
+        try:
+            return json.loads(text)
+        except ValueError as e:
+            raw, bad = {}, []
+            for line in text.splitlines():
+                m = re.match(r'\s*"(\w+)"\s*:\s*(.*?),?\s*$', line)
+                if not m or m.group(2) in ("[", "{"):
+                    continue
+                try:
+                    raw[m.group(1)] = json.loads(m.group(2))
+                except ValueError:
+                    bad.append(line.strip())
+            # Listes sur plusieurs lignes (dossiers racines...) : reprises à part
+            for key in ("roots", "excluded_folders", "perspective_auto_tags", "plantnet_tags"):
+                m = re.search(rf'"{key}"\s*:\s*(\[.*?\])', text, re.S)
+                if m:
+                    try:
+                        raw[key] = json.loads(m.group(1))
+                    except ValueError:
+                        bad.append(f"{key}: ...")
+            backup = self.settings_path.with_name(f"settings.broken-{time.strftime('%Y%m%d-%H%M%S')}.json")
+            shutil.copyfile(self.settings_path, backup)
+            msg = (f"settings.json illisible ({e}). Réglages repris sauf : {bad or '—'}. "
+                   f"Copie du fichier abîmé : {backup}")
+            logging.getLogger("phototheque").warning(msg)
+            raw["settings_version"] = raw.get("settings_version", Settings.settings_version)
+            self._repaired = True
+            return raw
 
     def save(self) -> None:
         tmp = self.settings_path.with_suffix(".tmp")

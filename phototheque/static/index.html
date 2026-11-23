@@ -87,6 +87,7 @@
         <button class="btn btn-dark viewer-nav prev" id="vPrev"><i class="bi bi-chevron-left"></i></button>
         <div class="viewer-imgwrap" id="vWrap">
           <img id="vImg" alt="" data-i18n-title="viewer.zoomHint">
+          <video id="vVideo" class="d-none" controls playsinline preload="metadata"></video>
           <div class="straighten-grid d-none" id="vGrid"></div>
           <div class="crop-box d-none" id="vCrop"></div>
           <div class="viewer-loading d-none" id="vLoading"><div class="spinner-border text-light"></div></div>
@@ -110,7 +111,7 @@
         <div class="d-flex align-items-center gap-2 mb-2">
           <button class="btn btn-sm btn-link p-0 fs-5" id="vStar"><i class="bi bi-star"></i></button>
           <h2 class="h6 mb-0 text-truncate" id="vName"></h2>
-          <span class="picasa-missing d-none" id="vPicasaMissing" data-i18n-title="viewer.picasaMissing"><i class="bi bi-p-square"></i><i class="bi bi-exclamation"></i></span>
+          <span class="picasa-mark d-none" id="vPicasaMark"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 8L8.00 1.00A7 7 0 0 1 14.66 5.84Z" fill="#e8453c"/><path d="M8 8L14.66 5.84A7 7 0 0 1 12.11 13.66Z" fill="#f39c12"/><path d="M8 8L12.11 13.66A7 7 0 0 1 3.89 13.66Z" fill="#f7d038"/><path d="M8 8L3.89 13.66A7 7 0 0 1 1.34 5.84Z" fill="#3cba54"/><path d="M8 8L1.34 5.84A7 7 0 0 1 8.00 1.00Z" fill="#4285f4"/><circle cx="8" cy="8" r="7" fill="none" stroke="rgba(0,0,0,.25)" stroke-width=".6"/></svg></span>
         </div>
         <div class="small text-body-secondary mb-3" id="vMeta"></div>
 
@@ -136,9 +137,10 @@
         <div class="btn-group btn-group-sm w-100 mb-3">
           <button class="btn btn-outline-secondary" id="eRotL" data-i18n-title="viewer.rotateLeft"><i class="bi bi-arrow-counterclockwise"></i></button>
           <button class="btn btn-outline-secondary" id="eRotR" data-i18n-title="viewer.rotateRight"><i class="bi bi-arrow-clockwise"></i></button>
-          <button class="btn btn-outline-secondary" id="eCrop"><i class="bi bi-crop"></i> <span data-i18n="viewer.cropTool"></span></button>
-          <button class="btn btn-outline-secondary" id="eCropRemove" data-i18n-title="viewer.cropRemove"><i class="bi bi-bounding-box-circles"></i></button>
+          <button class="btn btn-outline-secondary photo-only" id="eCrop"><i class="bi bi-crop"></i> <span data-i18n="viewer.cropTool"></span></button>
+          <button class="btn btn-outline-secondary photo-only" id="eCropRemove" data-i18n-title="viewer.cropRemove"><i class="bi bi-bounding-box-circles"></i></button>
         </div>
+        <div class="photo-only">
         <button class="btn btn-sm btn-primary w-100 mb-3 d-none" id="eCropApply" data-i18n="viewer.cropApply"></button>
 
         <label class="form-label small d-flex justify-content-between mb-0">
@@ -170,6 +172,7 @@
 
         <div class="small fw-semibold mt-3 mb-1" data-i18n="viewer.effects"></div>
         <div id="eEffects" class="d-flex flex-wrap gap-1 mb-3"></div>
+        </div>
 
         <div class="d-grid gap-2">
           <div class="btn-group btn-group-sm">
@@ -277,6 +280,36 @@
         <div class="form-text" data-i18n="settings.aiLicense"></div>
         <div class="small mt-2"><span class="fw-semibold" data-i18n="ai.queue"></span> : <span id="sQueue"></span>
           <button class="btn btn-sm btn-link p-0 ms-2" id="sRetry" data-i18n="ai.retry"></button></div>
+
+        <h6 class="mt-4"><i class="bi bi-flower1 me-1"></i><span data-i18n="plantnet.title"></span></h6>
+        <div class="form-text mb-2" data-i18n="plantnet.help"></div>
+        <div class="row g-3">
+          <div class="col-md-6"><label class="form-label small" data-i18n="plantnet.key"></label>
+            <div class="input-group input-group-sm">
+              <input type="password" class="form-control" id="sPnKey" autocomplete="off" spellcheck="false">
+              <button class="btn btn-outline-secondary" type="button" id="sPnKeyShow"><i class="bi bi-eye"></i></button></div></div>
+          <div class="col-md-6"><label class="form-label small" data-i18n="plantnet.tags"></label>
+            <input class="form-control form-control-sm" id="sPnTags"></div>
+          <div class="col-md-4"><label class="form-label small" data-i18n="plantnet.dailyMax"></label>
+            <input type="number" min="0" max="100000" step="1" class="form-control form-control-sm" id="sPnMax"></div>
+          <div class="col-md-4"><label class="form-label small" data-i18n="plantnet.minScore"></label>
+            <input type="number" min="0" max="100" step="5" class="form-control form-control-sm" id="sPnScore"></div>
+          <div class="col-md-4"><label class="form-label small" data-i18n="plantnet.lang"></label>
+            <select class="form-select form-select-sm" id="sPnLang"><option value="" data-i18n="plantnet.langUi"></option>
+              <option value="fr">Français</option><option value="en">English</option></select></div>
+        </div>
+        <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
+          <button class="btn btn-sm btn-success" id="sPnStart"><i class="bi bi-play-fill"></i> <span data-i18n="plantnet.start"></span></button>
+          <button class="btn btn-sm btn-outline-secondary d-none" id="sPnStop"><i class="bi bi-stop-fill"></i> <span data-i18n="plantnet.stop"></span></button>
+          <button class="btn btn-sm btn-link p-0" id="sPnRetry" data-i18n="plantnet.retry"></button>
+        </div>
+        <div class="small mt-1" id="sPnState"></div>
+
+        <div class="credits text-center small text-body-secondary mt-4 pt-3 border-top">
+          <div>Designed by GPM Factory</div>
+          <div>Built by Claude Anthropic</div>
+          <div>Powered by <a href="https://plantnet.org" target="_blank" rel="noopener">Pl@ntNet</a></div>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal" data-i18n="common.close"></button>

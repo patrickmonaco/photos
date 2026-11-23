@@ -11,9 +11,11 @@ phototheque/config.py
 phototheque/db.py
 phototheque/enhance.py
 phototheque/library.py
+phototheque/media.py
 phototheque/metadata.py
 phototheque/perspective.py
 phototheque/picasa.py
+phototheque/plantnet.py
 phototheque/render.py
 phototheque/sidecar.py
 phototheque/watcher.py
@@ -35,3 +37,4 @@ phototheque/static/vendor/bootstrap-icons/fonts/bootstrap-icons.woff
 phototheque/static/vendor/bootstrap-icons/fonts/bootstrap-icons.woff2
 tests/test_ai.py
 tests/test_app.py
+tests/test_plantnet.py

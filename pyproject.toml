@@ -1,6 +1,6 @@
 [project]
 name = "phototheque"
-version = "0.7.4"
+version = "0.9.3"
 description = "Gestionnaire de photos non destructif, compatible Picasa (FR/EN)"
 requires-python = ">=3.10"
 dependencies = [
@@ -13,6 +13,12 @@ dependencies = [
     "onnxruntime>=1.17",
     "tokenizers>=0.15",
     "watchdog>=4.0",
+    "imageio-ffmpeg>=0.5",   # ffmpeg intégré si absent du système (vidéos)
+    "pillow-heif>=0.16",     # photos HEIC / HEIF
+    "rawpy>=0.19",           # fichiers RAW (CR2, NEF, ARW, DNG...)
+    "exifread>=3.0",         # EXIF des RAW
+    "truststore>=0.9",       # HTTPS : certificats du système (Windows) pour Pl@ntNet
+    "certifi>=2024.2",
 ]
 
 [project.optional-dependencies]

@@ -77,6 +77,13 @@ const monthName = (m) => new Intl.DateTimeFormat(state.lang, { month: "long" }).
 const fmtDate = (iso) => iso ? new Intl.DateTimeFormat(state.lang, { dateStyle: "long", timeStyle: "short" }).format(new Date(iso)) : "";
 const fmtDay = (y, m, d) => new Intl.DateTimeFormat(state.lang, { dateStyle: "full" }).format(new Date(y, m - 1, d));
 const weekday = (y, m, d) => new Intl.DateTimeFormat(state.lang, { weekday: "long" }).format(new Date(y, m - 1, d));
+function fmtDuration(sec) {
+  if (sec == null || isNaN(sec)) return "";
+  sec = Math.round(sec);
+  const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = String(sec % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
+}
+
 const fmtSize = (bytes) => {
   if (!bytes) return "?";
   const fr = state.lang === "fr", nf = (v, d) => new Intl.NumberFormat(state.lang, { maximumFractionDigits: d }).format(v);
@@ -392,6 +399,40 @@ async function ensureIndex(idx) {
   return state.items[idx];
 }
 
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#vGoFolder") || !viewer.photo) return;
+  e.preventDefault();
+  goToFolder(viewer.photo);
+});
+
+// Ouvre le dossier d'une photo (depuis les propriétés) et l'y montre en surbrillance.
+async function goToFolder(p) {
+  const parts = p.folder ? p.folder.split("/") : [];
+  for (let i = 0; i < parts.length; i++) state.expanded.add(`${p.root}|${parts.slice(0, i).join("/")}`);
+  $('#sideTabs .nav-link[data-tab="folders"]').click();
+  viewer.modal.hide();
+  setView({ type: "folder", root: p.root, folder: p.folder || "" });
+  renderSidebar();
+  const active = $("#panel-folders .side-item.active");
+  if (active) active.scrollIntoView({ block: "center" });
+  const q = viewParams();
+  q.set("pid", p.id);
+  let index = null;
+  try { ({ index } = await api(`/api/photos/index?${q}`)); } catch (_) { return; }
+  if (index == null) return;
+  await ensureIndex(index);
+  layoutGrid();
+  const row = Math.floor(index / grid.cols);
+  const content = $(".content");
+  content.scrollTop = Math.max(0, $("#grid").offsetTop + grid.pad + row * (grid.size + grid.gap)
+                                   - (content.clientHeight - grid.size) / 2);
+  renderGrid();
+  requestAnimationFrame(() => {
+    const tile = grid.tiles.get(index);
+    if (tile) { tile.classList.add("located"); setTimeout(() => tile.classList.remove("located"), 2500); }
+  });
+}
+
 function layoutGrid() {
   const el = $("#grid");
   const width = el.clientWidth || $(".content").clientWidth;
@@ -449,8 +490,9 @@ function makeTile(it, idx) {
     const badges = [it.star ? `<i class="bi bi-star-fill star"></i>` : "",
       it.ops_source === "user" ? `<i class="bi bi-magic" title="${esc(t("viewer.source.user"))}"></i>` : "",
       it.ops_source === "picasa" ? `<i class="bi bi-p-square" title="${esc(t("viewer.source.picasa"))}"></i>` : ""].join("");
+    const vbadge = it.media === "video" ? `<span class="vbadge" title="${esc(t("view.video"))}"><i class="bi bi-film"></i>${fmtDuration(it.duration)}</span>` : "";
     div.innerHTML = `<img decoding="async" src="/api/photos/${it.id}/thumb?v=${it.ops_hash}" alt="">
-      <div class="badges">${badges}</div>
+      ${vbadge}<div class="badges">${badges}</div>
       <div class="name"><div class="fname">${esc(it.filename)}</div>${it.caption ? `<div class="caption">${esc(it.caption)}</div>` : ""}</div>`;
   } else {
     div.classList.add("placeholder");
@@ -471,6 +513,7 @@ function refreshTile(item) {
 
 $(".content").addEventListener("scroll", () => renderGrid(), { passive: true });
 new ResizeObserver(() => { layoutGrid(); renderGrid(); }).observe($("#grid"));
+window.addEventListener("resize", () => { if (viewer.isVideo) viewer.fitVideo(); });
 
 /* ------------------------------------------------------------------ sélection
    « Tout sélectionner » ne charge rien : la sélection est décrite par les filtres de la vue
@@ -645,9 +688,11 @@ const viewer = {
     zoom.exit(false);
     const item = await ensureIndex(idx);
     if (!item) return;
-    if (!this.photo || this.photo.id !== item.id) this.blank();
+    if (!this.photo || this.photo.id !== item.id) { this.blank(); this.stopVideo(); }
     this.idx = idx;
     this.photo = await api(`/api/photos/${item.id}`);
+    this.isVideo = this.photo.media === "video";
+    $(".viewer").classList.toggle("is-video", this.isVideo);
     this.draft = clone(this.photo.ops);
     this.perspEstimate = null;
     this.beforeShown = false;
@@ -670,6 +715,7 @@ const viewer = {
   // n'est pas prête, l'image actuelle (et son éventuelle rotation CSS de prévisualisation) reste
   // à l'écran. Plus d'aller-retour visible au relâchement du curseur de redressement.
   async renderImage() {
+    if (this.isVideo) return this.renderVideo();
     const img = $("#vImg");
     const token = (this.renderToken = (this.renderToken || 0) + 1);
     zoom.exit(false);
@@ -710,11 +756,58 @@ const viewer = {
     this.prefetch();
   },
 
+  /* ---- vidéos : lecture directe (MP4) ou copie convertie par le serveur (vieux AVI...) ---- */
+  renderVideo() {
+    const v = $("#vVideo"), p = this.photo;
+    this.renderEditState();
+    const src = `/api/photos/${p.id}/video`;
+    if (v.dataset.pid !== String(p.id)) {
+      v.dataset.pid = p.id;
+      const spinner = setTimeout(() => { if (v.dataset.pid === String(p.id)) $("#vLoading").classList.remove("d-none"); }, 350);
+      const ready = () => { clearTimeout(spinner); $("#vLoading").classList.add("d-none"); this.fitVideo(); };
+      v.onloadedmetadata = ready;
+      v.onerror = () => { ready(); toast(t("viewer.videoError")); };
+      v.onended = () => slideshow.videoEnded();
+      v.src = src;
+      v.classList.remove("d-none");
+      if (slideshow.active && slideshow.playing) { slideshow.holdForVideo(); v.play().catch(() => {}); }
+    }
+    this.fitVideo();
+    this.prefetch();
+  },
+
+  // Rotation (seule retouche des vidéos) : en CSS, réduite pour tenir dans le cadre si quart de tour.
+  fitVideo() {
+    const v = $("#vVideo");
+    const rot = this.draft.find((o) => o.op === "rotate90");
+    const n = rot ? rot.n : 0;
+    let scale = 1;
+    if (n % 2 && v.clientWidth && v.clientHeight) {
+      const stage = $(".viewer-stage").getBoundingClientRect();
+      const maxW = stage.width - 120, maxH = stage.height - 40;
+      // une fois tournée, la largeur affichée devient la hauteur : on réduit pour tenir dans le cadre
+      scale = Math.min(1, maxW / v.clientHeight, maxH / v.clientWidth);
+    }
+    v.style.transform = n ? `rotate(${n * 90}deg) scale(${scale})` : "";
+  },
+
+  stopVideo() {
+    const v = $("#vVideo");
+    if (!v.dataset.pid) return;
+    v.pause();
+    v.removeAttribute("src");
+    v.load();
+    delete v.dataset.pid;
+    v.style.transform = "";
+    v.classList.add("d-none");
+    $("#vLoading").classList.add("d-none");
+  },
+
   // Précharge les aperçus voisins : le serveur les calcule pendant qu'on regarde la photo.
   prefetch() {
     for (const d of [1, -1, 2]) {
       const it = state.items[this.idx + d];
-      if (it) new Image().src = `/api/photos/${it.id}/preview?v=${it.ops_hash}`;
+      if (it && it.media !== "video") new Image().src = `/api/photos/${it.id}/preview?v=${it.ops_hash}`;
     }
     if (this.idx + 3 < state.total && !state.items[this.idx + 3]) ensureIndex(this.idx + 3);
   },
@@ -725,13 +818,27 @@ const viewer = {
     $("#vName").textContent = p.filename;
     $("#vStar").innerHTML = `<i class="bi ${p.star ? "bi-star-fill text-warning" : "bi-star"}"></i>`;
     $("#vMeta").innerHTML = `${esc(t("viewer.date"))} : ${esc(fmtDate(p.taken_at))}<br>
-      ${esc(t("viewer.folder"))} : ${esc(p.folder || baseName(p.root))}<br>
+      ${esc(t("viewer.folder"))} : <a href="#" id="vGoFolder" title="${esc(t("viewer.goFolder"))}">${esc(p.folder || baseName(p.root))} <i class="bi bi-box-arrow-up-right small"></i></a><br>
       ${esc(t("viewer.size"))} : ${p.width ?? "?"} × ${p.height ?? "?"}<br>
       ${esc(t("viewer.weight"))} : ${esc(fmtSize(p.size))}`
       + (p.camera ? `<br>${esc(t("viewer.camera"))} : ${esc(p.camera)}` : "")
+      + (p.plant && p.plant.species ? `<br><i class="bi bi-flower1"></i> <i>${esc(p.plant.species)}</i>`
+          + (p.plant.common ? ` (${esc(p.plant.common)})` : "")
+          + ` · ${Math.round(p.plant.score * 100)} %`
+          + (p.plant.family ? ` · ${esc(p.plant.family)}` : "")
+          + ` <span class="text-body-secondary">— Pl@ntNet</span>` : "")
+      + (p.video ? `<br>${esc(t("viewer.duration"))} : ${fmtDuration(p.duration)} · ${esc(p.video.codec || "?")}`
+          + (p.video.audio ? ` / ${esc(p.video.audio)}` : "")
+          + (p.video.playable ? "" : ` <span class="badge text-bg-secondary">${esc(t("viewer.videoConverted"))}</span>`) : "")
       + (p.exif_orientation && p.exif_orientation !== 1 ? `<br>${esc(t("viewer.orientation"))} : ${p.exif_orientation}` : "");
     // Pictogramme discret à droite du nom : le .picasa.ini du dossier n'a pas d'entrée pour ce fichier
-    $("#vPicasaMissing").classList.toggle("d-none", !(p.picasa && p.picasa.ini && !p.picasa.found));
+    const dirs = (p.picasa && p.picasa.directives) || [];
+    const mark = $("#vPicasaMark");
+    mark.classList.toggle("d-none", !dirs.length);
+    mark.title = dirs.length ? `${t("viewer.picasaDirectives")} : ` + dirs.map((k) => {
+      const [kind, n] = k.split(":");
+      return t(`viewer.picasaKind.${kind}`, { n });
+    }).join(", ") : "";
     $("#vCaption").value = p.caption || "";
     $("#vTags").innerHTML = p.tags.map((x) => {
       const auto = x.source === "auto" || x.source === "face";
@@ -876,6 +983,7 @@ const viewer = {
 
   // Avant / après : affiche la photo sans aucune retouche tant que le bouton (ou O) est maintenu.
   async showOriginal(on) {
+    if (this.isVideo) return;
     const img = $("#vImg");
     if (!on) {
       if (this.beforeShown) { img.src = this.afterSrc; this.beforeShown = false; }
@@ -1045,12 +1153,18 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "ArrowLeft") { slideshow.restart(); viewer.load(viewer.idx - 1); }
   if (e.key === "ArrowRight") { slideshow.restart(); viewer.load(viewer.idx + 1); }
   if (e.key === " " && slideshow.active) { e.preventDefault(); slideshow.toggle(); }
+  else if (e.key === " " && viewer.isVideo && document.activeElement !== $("#vVideo")) {
+    e.preventDefault();
+    const v = $("#vVideo");
+    if (v.paused) v.play().catch(() => {}); else v.pause();
+  }
   if (e.key.toLowerCase() === "o" && !e.repeat) viewer.showOriginal(true);
   if (e.key === "Escape" && !slideshow.active && !$("#viewer").contains(document.activeElement)) viewer.modal.hide();
 });
 $("#viewer").addEventListener("hide.bs.modal", () => { viewer.closing = true; });
 $("#viewer").addEventListener("hidden.bs.modal", () => {
   viewer.closing = false; slideshow.stop(); setFullview(false); viewer.photo = null; viewer.stopCrop();
+  viewer.stopVideo(); viewer.isVideo = false; $(".viewer").classList.remove("is-video");
   viewer.blank();   // à la prochaine ouverture, aucune trace de la photo précédente
 });
 
@@ -1103,6 +1217,7 @@ const slideshow = {
   pause() {
     this.playing = false;
     clearInterval(this.timer);
+    if (viewer.isVideo) $("#vVideo").pause();
     this.icon("bi-play-fill", this.active ? "slideshow.play" : "slideshow.start");
   },
   icon(cls, key) {
@@ -1117,7 +1232,19 @@ const slideshow = {
   restart() {
     if (!this.active || !this.playing) return;
     clearInterval(this.timer);
-    this.timer = setInterval(() => viewer.load(viewer.idx + 1 < state.total ? viewer.idx + 1 : 0), this.interval());
+    if (viewer.isVideo) {                 // une vidéo est lue en entier, puis on passe à la suite
+      const v = $("#vVideo");
+      if (v.paused && !v.ended) v.play().catch(() => {});
+      return;
+    }
+    this.timer = setInterval(() => this.next(), this.interval());
+  },
+  next() { return viewer.load(viewer.idx + 1 < state.total ? viewer.idx + 1 : 0); },
+  holdForVideo() { clearInterval(this.timer); },
+  async videoEnded() {
+    if (!this.active || !this.playing) return;
+    await this.next();
+    this.restart();
   },
   stop() {
     this.active = false;
@@ -1234,7 +1361,8 @@ const zoom = {
 
 (() => {
   const wrap = $("#vWrap");
-  const ignore = (e) => e.button !== 0 || viewer.cropping || slideshow.active || e.target.closest("#ssBar, #vFull");
+  const ignore = (e) => e.button !== 0 || viewer.cropping || slideshow.active || viewer.isVideo
+    || e.target.closest("#ssBar, #vFull");
   wrap.addEventListener("pointerdown", (e) => {
     if (ignore(e)) return;
     e.preventDefault();
@@ -1408,6 +1536,13 @@ async function openSettings() {
   $("#sStrength").value = s.perspective_strength;
   $("#sF35").value = s.default_f35;
   $("#sCalibResult").textContent = "";
+  $("#sPnKey").value = s.plantnet_key || "";
+  $("#sPnKey").type = "password";
+  $("#sPnTags").value = (s.plantnet_tags || []).join(", ");
+  $("#sPnMax").value = s.plantnet_daily_max;
+  $("#sPnScore").value = Math.round((s.plantnet_min_score ?? 0.2) * 100);
+  $("#sPnLang").value = s.plantnet_lang || "";
+  refreshPlantNet();
   bootstrap.Modal.getOrCreateInstance($("#settings")).show();
   setTimeout(refreshAI, 200);
 }
@@ -1451,6 +1586,49 @@ $("#sRootAdd").onclick = async () => {
   await openSettings();
   startScan();
 };
+/* ---- Pl@ntNet ---- */
+const plantnetSettings = () => ({
+  plantnet_key: $("#sPnKey").value.trim(), plantnet_tags: $("#sPnTags").value,
+  plantnet_daily_max: Math.max(0, Math.round(+$("#sPnMax").value || 0)),
+  plantnet_min_score: Math.min(100, Math.max(0, +$("#sPnScore").value || 0)) / 100,
+  plantnet_lang: $("#sPnLang").value,
+});
+let pnTimer = null;
+async function refreshPlantNet() {
+  clearTimeout(pnTimer);
+  let st;
+  try { st = await api("/api/plantnet"); } catch { return; }
+  const q = st.quota;
+  const parts = [t("plantnet.quota", { used: q.used, max: q.max, left: q.left, reset: q.reset }),
+                 t("plantnet.pending", { n: st.pending })];
+  if (st.running) parts.unshift(t("plantnet.running", { done: st.done, total: st.total }));
+  if (st.running || st.message) parts.push(t("plantnet.results", { ok: st.identified, low: st.low, nf: st.notfound, err: st.errors }));
+  if (!st.running && st.message && st.message !== "done") parts.push(`<span class="text-warning">${esc(t("plantnet.msg." + st.message))}</span>`);
+  $("#sPnState").innerHTML = parts.map((x) => x.startsWith("<") ? x : esc(x)).join(" · ");
+  $("#sPnStart").disabled = st.running || !st.key || !st.pending || !q.left;
+  $("#sPnStop").classList.toggle("d-none", !st.running);
+  if (st.running && $("#settings").classList.contains("show")) pnTimer = setTimeout(refreshPlantNet, 1500);
+  if (!st.running && plantnetWasRunning) { plantnetWasRunning = false; setView(state.view, { keepScroll: true }); }
+}
+let plantnetWasRunning = false;
+$("#sPnKeyShow").onclick = () => { const i = $("#sPnKey"); i.type = i.type === "password" ? "text" : "password"; };
+["#sPnKey", "#sPnTags", "#sPnMax"].forEach((id) => $(id).addEventListener("change", async () => {
+  await api("/api/settings", { method: "PUT", json: plantnetSettings() });
+  refreshPlantNet();
+}));
+$("#sPnStart").onclick = async () => {
+  await api("/api/settings", { method: "PUT", json: plantnetSettings() });
+  try { await api("/api/plantnet/start", { method: "POST" }); } catch (e) { toast(t("plantnet.msg.key")); }
+  plantnetWasRunning = true;
+  refreshPlantNet();
+};
+$("#sPnStop").onclick = async () => { await api("/api/plantnet/stop", { method: "POST" }); refreshPlantNet(); };
+$("#sPnRetry").onclick = async () => {
+  const r = await api("/api/plantnet/reset", { json: { which: "failed" } });
+  toast(t("plantnet.retried", { n: r.reset }));
+  refreshPlantNet();
+};
+
 $("#sRetry").onclick = async () => { await api("/api/ai/retry", { method: "POST" }); refreshAI(); };
 $("#sCalibrate").onclick = async () => {
   const out = $("#sCalibResult");
@@ -1475,7 +1653,7 @@ $("#sSave").onclick = async () => {
     ai_clip: $("#sAiClip").checked, ai_faces: $("#sAiFaces").checked, face_model: $("#sFaceModel").value,
     ai_tag_language: $("#sTagLang").value, ai_tag_threshold: +$("#sTagThreshold").value,
     watch_folders: $("#sWatch").checked, enhance_strength: +$("#sEnhanceStrength").value / 100,
-    cache_max_gb: +$("#sCacheMax").value } });
+    cache_max_gb: +$("#sCacheMax").value, ...plantnetSettings() } });
   applyTheme(state.settings.theme);
   toast(t("settings.saved"));
   bootstrap.Modal.getOrCreateInstance($("#settings")).hide();

@@ -28,6 +28,12 @@ pip install -e .
 
 Bootstrap et ses icônes sont embarqués : l'application fonctionne hors ligne.
 
+### ffmpeg (vidéos)
+
+Les vidéos utilisent ffmpeg. Sous Ubuntu, installer la version du système, plus complète et qui
+fournit `ffprobe` : `sudo apt install ffmpeg`. Sous Windows, rien à faire : le paquet
+`imageio-ffmpeg` (installé avec l'application) contient ffmpeg.
+
 ## Utilisation
 
 ```bash
@@ -72,9 +78,11 @@ Options : `--data DOSSIER` (par défaut `~/.phototheque`, ou variable `PHOTOTHEQ
 | Diaporama | Barre en filigrane sur le bas de la photo dans la visionneuse (▶ lance le diaporama depuis la photo affichée), ou bouton « Diaporama » de la barre d'outils. Plein écran, durée réglable, pause (Espace), Échap pour quitter |
 | Zoom (comme Picasa) | Clic gauche maintenu plus de 0,5 s sur la photo : zoom à 100 % sous le curseur (rendu pleine résolution), curseur en main ; glisser en gardant le bouton enfoncé pour se déplacer ; clic simple ou Échap pour revenir |
 | Plein écran | Icône en filigrane en haut à droite de la photo, ou double-clic sur la photo |
-| Propriétés | Date, dossier, dimensions, poids, appareil photo (et objectif), orientation EXIF si elle n'est pas normale. Petit pictogramme « P! » orange à droite du nom quand le .picasa.ini du dossier n'a pas d'entrée pour la photo |
+| Propriétés | Date, dossier, dimensions, poids, appareil photo (et objectif), orientation EXIF si elle n'est pas normale. Petite pastille ronde multicolore à droite du nom quand le .picasa.ini contient des directives pour la photo (le détail s'affiche au survol : recadrage, redressement, filtres, favori, légende, mots-clés, visages, albums) |
 | Miniatures | Au survol : nom du fichier et, en dessous, la légende si elle existe |
-| Export | JPEG retouché en pleine résolution, accès à l'original |
+| Vidéos | MP4, MOV, AVI, MKV, 3GP, MTS, WMV… indexées comme les photos (date de tournage, durée), badge 🎞 (pellicule) avec la durée sur les miniatures (image prise à 10 % de la vidéo). Lecture dans la visionneuse : MP4 H.264 lu directement, vieux AVI (MJPEG, DivX, Xvid…) convertis à la volée en MP4 720p dans le cache, l'original n'étant jamais modifié. Seule retouche : le quart de tour. Le diaporama lit les vidéos en entier puis passe à la suite. Tags automatiques et visages calculés sur l'image de la miniature |
+| HEIC et RAW | Photos d'iPhone (HEIC) et fichiers RAW (CR2, CR3, NEF, ARW, DNG, ORF, RW2, RAF, PEF…) : affichage, retouches non destructives et IA comme pour un JPEG. Pour les RAW, l'aperçu JPEG intégré est utilisé pour les miniatures ; le développement complet sert au zoom et à l'export |
+| Export | JPEG retouché en pleine résolution (l'original pour une vidéo), accès à l'original |
 | Langues et thème | Français et anglais ; thème clair, sombre ou automatique |
 | IA (locale) | Tags automatiques, recherche en langage naturel, photos similaires, visages regroupés par personne |
 
@@ -118,6 +126,27 @@ Tout tourne en local avec ONNX Runtime (GPU utilisé si disponible : CUDA, ou Di
 - Installation hors ligne des modèles : déposer les fichiers dans `<données>/models/clip-vit-b32/`
   (`vision_model.onnx`, `text_model.onnx`, `tokenizer.json`) et `<données>/models/buffalo_l/`
   (`det.onnx` = det_10g, `rec.onnx` = w600k_r50).
+
+## Identification des plantes (Pl@ntNet)
+
+Service en ligne [Pl@ntNet](https://my.plantnet.org) (clé personnelle, plan gratuit : 500
+identifications par jour). Dans Réglages › Identification des plantes :
+
+- **Clé d'API** : celle de votre compte my.plantnet.org.
+- **Tags concernés** : `fleur, plante, arbre` par défaut (tous types de tags, y compris les tags
+  automatiques). Seules les photos portant un de ces tags et **sans légende** sont envoyées ; les
+  vidéos sont ignorées.
+- **Appels maximum par jour** : 500 par défaut. Compteur local recalé sur le nombre restant renvoyé
+  par Pl@ntNet ; le service compte par jour UTC (remise à zéro à 1 h en hiver, 2 h en été).
+- **Confiance minimale** : en dessous (20 % par défaut), le résultat est conservé mais pas mis en
+  légende.
+- **Identifier les plantes** lance le traitement en arrière-plan, des plus récentes aux plus
+  anciennes, jusqu'au plafond du jour. Relancer le lendemain pour la suite : une photo déjà
+  envoyée ne l'est plus (« Retenter les photos non reconnues » pour les rejouer).
+
+La légende posée est « Nom commun (Nom scientifique) », enregistrée dans `.phototheque.json` ;
+l'image envoyée est la photo telle qu'affichée (recadrage et redressement appliqués), petit côté
+1280 px. Les propriétés de la photo affichent l'espèce, le score et la famille.
 
 ## Reprise de Picasa
 

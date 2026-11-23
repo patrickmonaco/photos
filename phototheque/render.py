@@ -106,18 +106,12 @@ def apply_ops(img: Image.Image, ops: list[dict], default_f35: float = 28.0,
 
 
 def render(path: Path, ops: list[dict], size: int, default_f35: float = 28.0,
-           photo_f35: float | None = None, base_ops: bool = True) -> Image.Image:
-    with Image.open(path) as src:
-        if size and src.format == "JPEG":
-            # Décodage JPEG réduit (1/2, 1/4, 1/8) : bien plus rapide. Il faut demander une taille
-            # respectant le ratio de l'image, sinon Pillow décode en pleine résolution.
-            w, h = src.size
-            margin = _zoom_margin(ops)
-            scale = size * margin / max(w, h)
-            if scale < 1:
-                src.draft("RGB", (max(1, int(w * scale)), max(1, int(h * scale))))
-        src.load()
-        img = apply_ops(src, ops, default_f35, photo_f35)
+           photo_f35: float | None = None, duration: float | None = None) -> Image.Image:
+    # Ouverture adaptée au type de fichier (JPEG décodé en taille réduite, HEIC, RAW, image d'une vidéo).
+    # La marge tient compte des opérations qui agrandissent une partie de l'image (recadrage...).
+    from . import media
+    want = int(size * _zoom_margin(ops)) if size else 0
+    img = apply_ops(media.open_image(path, want, duration), ops, default_f35, photo_f35)
     if size:
         img.thumbnail((size, size), Image.LANCZOS, reducing_gap=2.0)
     return img
@@ -193,7 +187,7 @@ class RenderCache:
 
     def usage(self) -> dict:
         """Taille du cache par catégorie (octets, nombre de fichiers)."""
-        out = {"thumb": [0, 0], "preview": [0, 0], "full": [0, 0], "faces": [0, 0]}
+        out = {"thumb": [0, 0], "preview": [0, 0], "full": [0, 0], "faces": [0, 0], "video": [0, 0]}
         for kind, path, st in self._walk():
             out[kind][0] += st.st_size
             out[kind][1] += 1
@@ -207,9 +201,9 @@ class RenderCache:
         for sub in os.scandir(self.cache_dir):
             if not sub.is_dir():
                 continue
-            kind_dir = {"full": "full", "faces": "faces"}.get(sub.name)
+            kind_dir = {"full": "full", "faces": "faces", "video": "video"}.get(sub.name)
             for e in os.scandir(sub.path):
-                if not e.name.endswith(".jpg"):
+                if not e.name.endswith((".jpg", ".mp4")) or e.name.endswith(".part.mp4"):
                     continue
                 st = e.stat()
                 kind = kind_dir or ("thumb" if e.name.endswith(f"_{SIZES['thumb']}.jpg") else "preview")
@@ -225,7 +219,7 @@ class RenderCache:
             removed, freed = 0, 0
             if total > limit:
                 target = limit * 0.9
-                order = {"full": 0, "preview": 1, "faces": 2, "thumb": 3}
+                order = {"full": 0, "video": 1, "preview": 2, "faces": 3, "thumb": 4}
                 for kind, path, size, _ in sorted(files, key=lambda f: (order[f[0]], f[3])):
                     if total - freed <= target:
                         break
@@ -243,7 +237,7 @@ class RenderCache:
         """Vide une partie du cache : 'previews' (aperçus + zoom) ou 'all'."""
         n = 0
         for kind, path, _ in list(self._walk()):
-            if what == "all" or kind in ("preview", "full"):
+            if what == "all" or kind in ("preview", "full", "video"):
                 try:
                     os.unlink(path)
                     n += 1

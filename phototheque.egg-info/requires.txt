@@ -7,6 +7,12 @@ opencv-python-headless>=4.8
 onnxruntime>=1.17
 tokenizers>=0.15
 watchdog>=4.0
+imageio-ffmpeg>=0.5
+pillow-heif>=0.16
+rawpy>=0.19
+exifread>=3.0
+truststore>=0.9
+certifi>=2024.2
 
 [dev]
 pytest>=8

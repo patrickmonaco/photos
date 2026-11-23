@@ -7,6 +7,17 @@ import threading
 from pathlib import Path
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS plant_id (
+    photo_id   INTEGER PRIMARY KEY REFERENCES photo(id) ON DELETE CASCADE,
+    status     TEXT NOT NULL,        -- 'ok' | 'low' (score trop faible) | 'notfound' | 'error'
+    species    TEXT,                 -- nom scientifique
+    common     TEXT,                 -- nom commun (langue choisie)
+    family     TEXT,
+    score      REAL,
+    caption    TEXT,                 -- légende posée (si la photo n'en avait pas)
+    at         TEXT NOT NULL
+);
+
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 
@@ -34,6 +45,9 @@ CREATE TABLE IF NOT EXISTS photo (
     file_caption  TEXT,
     merge_sig     TEXT,                 -- signature des sources fusionnées (évite les réécritures)
     camera        TEXT,                 -- modèle d'appareil (EXIF), '' si inconnu
+    media         TEXT DEFAULT 'image', -- 'image' | 'video'
+    duration      REAL,                 -- durée d'une vidéo (s)
+    codec         TEXT,                 -- codec vidéo
     exif_orientation INTEGER,
     UNIQUE(root, relpath)
 );
@@ -156,7 +170,8 @@ class Database:
 
     # Colonnes ajoutées après la v0.1 (une base existante n'est pas recréée).
     _ADDED_COLUMNS = {
-        "photo": {"merge_sig": "TEXT", "camera": "TEXT", "exif_orientation": "INTEGER"},
+        "photo": {"merge_sig": "TEXT", "camera": "TEXT", "exif_orientation": "INTEGER",
+                  "media": "TEXT DEFAULT 'image'", "duration": "REAL", "codec": "TEXT"},
         "face": {"score": "REAL", "embedding": "BLOB", "cluster_id": "INTEGER"},
     }
 

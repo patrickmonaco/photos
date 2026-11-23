@@ -10,7 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .albums import AlbumStore
-from .config import IMAGE_EXTENSIONS, SIDECAR_NAME, Config
+from .config import MEDIA_EXTENSIONS, SIDECAR_NAME, Config
 from .db import Database
 from .metadata import date_parts, read_metadata
 from .picasa import find_ini, parse_folder_cached as parse_folder
@@ -124,7 +124,10 @@ class Library:
 
     def _settings_sig(self) -> str:
         s = self.config.settings
-        return f"{s.picasa_tilt_deg_per_unit}|{s.picasa_rotate_clockwise}|{s.enhance_strength}|{PICASA_CONVENTION}"
+        # Les types de fichiers reconnus en font partie : après l'ajout des vidéos, HEIC et RAW (v0.8),
+        # chaque dossier est relu une fois pour y trouver ces fichiers jusque-là ignorés.
+        exts = ",".join(sorted(MEDIA_EXTENSIONS))
+        return f"{s.picasa_tilt_deg_per_unit}|{s.picasa_rotate_clockwise}|{s.enhance_strength}|{PICASA_CONVENTION}|{exts}"
 
     @staticmethod
     def _folder_sig(folder: Path, settings_sig: str) -> str:
@@ -169,7 +172,7 @@ class Library:
         rel_folder = folder.relative_to(root).as_posix()
         rel_folder = "" if rel_folder == "." else rel_folder
         self.scan_state["folder"] = rel_folder or str(root)
-        images = sorted(f for f in filenames if Path(f).suffix.lower() in IMAGE_EXTENSIONS)
+        images = sorted(f for f in filenames if Path(f).suffix.lower() in MEDIA_EXTENSIONS)
         if not images:
             return
         s = self.config.settings
@@ -278,7 +281,8 @@ class Library:
                           year=y, month=m, day=d, f35=meta["f35"],
                           file_keywords=json.dumps(meta["keywords"], ensure_ascii=False),
                           file_caption=meta["caption"], camera=meta["camera"],
-                          exif_orientation=meta["orientation"])
+                          exif_orientation=meta["orientation"], media=meta["media"],
+                          duration=meta["duration"], codec=meta["codec"])
             if row:
                 pid = row["id"]
                 sets = ",".join(f"{k}=:{k}" for k in values)
@@ -385,23 +389,17 @@ class Library:
 
     def perspective_suggestion(self, pid: int) -> dict:
         """Détecte les lignes fuyantes et propose une nouvelle liste d'opérations."""
-        from PIL import Image
-        from . import perspective
+        from . import media, perspective
         from .render import apply_ops
         row = self.photo(pid)
+        if row["media"] == "video":
+            return {"found": False}
         ops = json.loads(row["ops"] or "[]")
         head = [o for o in ops if o.get("op") == "rotate90"]
         rest = [o for o in ops if o.get("op") not in ("rotate90", "perspective", "straighten")]
         s = self.config.settings
         f35 = row["f35"] or s.default_f35
-        with Image.open(self.abs_path(row)) as src:
-            if src.format == "JPEG":
-                w, h = src.size
-                k = 1400 / max(w, h)
-                if k < 1:
-                    src.draft("RGB", (int(w * k), int(h * k)))
-            src.load()
-            img = apply_ops(src, head)
+        img = apply_ops(media.open_image(self.abs_path(row), 1400), head)
         est = perspective.estimate(img, f35)
         if not est:
             return {"found": False}
@@ -416,7 +414,7 @@ class Library:
         from .render import render
         row = self.photo(pid)
         base = [o for o in json.loads(row["ops"] or "[]") if o.get("op") != "autoenhance"]
-        img = render(self.abs_path(row), base, 800, self.config.settings.default_f35, row["f35"])
+        img = render(self.abs_path(row), base, 800, self.config.settings.default_f35, row["f35"], row["duration"])
         op = {"op": "autoenhance", **enhance.analyze(img), "strength": self.config.settings.enhance_strength}
         return {"params": op, "ops": base + [op]}
 

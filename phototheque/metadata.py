@@ -91,7 +91,25 @@ def _decode(b) -> str:
 
 def read_metadata(path: Path) -> dict:
     meta: dict = {"width": None, "height": None, "taken_at": None, "date_source": "file",
-                  "f35": None, "keywords": [], "caption": None, "camera": "", "orientation": 1}
+                  "f35": None, "keywords": [], "caption": None, "camera": "", "orientation": 1,
+                  "media": "image", "duration": None, "codec": None}
+    from . import media
+    kind = media.kind_of(path)
+    if kind == "video":
+        info = media.probe(path)
+        meta.update(media="video", width=info["width"], height=info["height"], duration=info["duration"],
+                    codec=info["codec"])
+        if info["created"]:
+            meta["taken_at"], meta["date_source"] = info["created"], "exif"
+    elif kind == "raw":
+        info = media.raw_metadata(path)
+        meta.update({k: info[k] for k in ("width", "height", "camera", "orientation", "f35")})
+        if info["taken_at"]:
+            meta["taken_at"], meta["date_source"] = info["taken_at"], "exif"
+    if kind != "image":
+        if not meta["taken_at"]:
+            meta["taken_at"] = datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds")
+        return meta
     try:
         with Image.open(path) as img:
             w, h = img.size
@@ -154,6 +172,13 @@ def camera_name(exif) -> str:
 
 def read_camera(path: Path) -> tuple[str, int]:
     """Lecture rapide du modèle d'appareil et de l'orientation EXIF."""
+    from . import media
+    kind = media.kind_of(path)
+    if kind == "video":
+        return "", 1
+    if kind == "raw":
+        info = media.raw_metadata(path)
+        return info["camera"], info["orientation"]
     try:
         with Image.open(path) as img:
             exif = img.getexif()

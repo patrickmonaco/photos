@@ -12,7 +12,7 @@ import threading
 import time
 from pathlib import Path
 
-from .config import IMAGE_EXTENSIONS
+from .config import MEDIA_EXTENSIONS
 from .picasa import INI_NAMES
 
 log = logging.getLogger("phototheque.watch")
@@ -35,7 +35,7 @@ class FolderWatcher:
         p = Path(path)
         if any(part.startswith(".") and part not in INI_NAMES for part in p.parts[-6:-1]):
             return False  # .picasaoriginals, dossiers cachés
-        return p.suffix.lower() in IMAGE_EXTENSIONS or p.name in INI_NAMES
+        return p.suffix.lower() in MEDIA_EXTENSIONS or p.name in INI_NAMES
 
     def notify(self, path: str, is_dir: bool = False) -> None:
         if not is_dir and not self._relevant(path):

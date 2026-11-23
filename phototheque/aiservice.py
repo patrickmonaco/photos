@@ -91,6 +91,7 @@ class AIService:
         sql = ("INSERT OR IGNORE INTO job(photo_id, type) SELECT DISTINCT p.id, 'perspective_auto' FROM photo p "
                "JOIN photo_tag pt ON pt.photo_id=p.id JOIN tag t ON t.id=pt.tag_id "
                f"WHERE lower(t.name) IN ({marks}) AND (p.ops IS NULL OR p.ops NOT LIKE '%\"perspective\"%') "
+               "AND coalesce(p.media, 'image') != 'video' "
                "AND NOT EXISTS (SELECT 1 FROM job j WHERE j.photo_id=p.id AND j.type='perspective_auto' "
                "AND j.status IN ('done', 'error'))")
         params: list = list(tags)
@@ -205,7 +206,7 @@ class AIService:
         for r in rows:
             row = self.lib.photo(r["photo_id"])
             try:
-                imgs.append(ai.load_rgb(self.lib.abs_path(row), 336))
+                imgs.append(ai.load_rgb(self.lib.abs_path(row), 336, row["duration"]))
                 ok.append(r)
             except Exception as exc:
                 self._finish(r["id"], "error", error=str(exc))
@@ -307,7 +308,7 @@ class AIService:
         if model is None:
             raise _NotReady
         row = self.lib.photo(pid)
-        img = ai.load_rgb(self.lib.abs_path(row), 1280)
+        img = ai.load_rgb(self.lib.abs_path(row), 1280, row["duration"])
         w, h = img.size
         dets = [d for d in model.detect(img) if d["score"] >= 0.6
                 and min(d["box"][2] - d["box"][0], d["box"][3] - d["box"][1]) >= 32]
@@ -486,7 +487,8 @@ class AIService:
         f = self.db.one("SELECT * FROM face WHERE id=?", (face_id,))
         if not f:
             return None
-        img = ai.load_rgb(self.lib.abs_path(self.lib.photo(f["photo_id"])), 1600)
+        prow = self.lib.photo(f["photo_id"])
+        img = ai.load_rgb(self.lib.abs_path(prow), 1600, prow["duration"])
         w, h = img.size
         cx, cy = (f["l"] + f["r"]) / 2 * w, (f["t"] + f["b"]) / 2 * h
         half = max((f["r"] - f["l"]) * w, (f["b"] - f["t"]) * h) * 0.8

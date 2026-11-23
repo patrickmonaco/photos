@@ -9,9 +9,12 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
+
+from . import __version__
 from fastapi.staticfiles import StaticFiles
 from .aiservice import AIService
+from .plantnet import KeyRejected, PlantNetService
 from .config import Config
 from .library import Library, ops_hash
 from .metadata import read_camera
@@ -57,6 +60,8 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
     app.state.library = lib
     aisvc = AIService(lib)
     app.state.ai = aisvc
+    plantnet = PlantNetService(lib)
+    app.state.plantnet = plantnet
     # Les miniatures passent par un nombre limité de rendus simultanés, pour que l'aperçu
     # de la visionneuse ne fasse pas la queue derrière une grille entière.
     thumb_slots = threading.Semaphore(3)
@@ -96,7 +101,7 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
             t = time.time()
             response = await call_next(request)
             dt = time.time() - t
-            if dt > 0.5 and not request.url.path.endswith(("/thumb", "/preview", "/full", "/render", "/export")):
+            if dt > 0.5 and not request.url.path.endswith(("/thumb", "/preview", "/full", "/render", "/export", "/video")):
                 log.warning("requête lente : %s %s en %.1f s", request.method, request.url.path, dt)
             return response
 
@@ -138,13 +143,21 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
         for key in ("language", "picasa_tilt_deg_per_unit", "picasa_rotate_clockwise", "default_f35",
                     "perspective_strength", "theme", "slideshow_interval", "ai_clip", "ai_faces",
                     "ai_tag_language", "ai_tag_threshold", "face_model", "face_cluster_threshold",
-                    "enhance_strength", "watch_folders", "cache_max_gb"):
+                    "enhance_strength", "watch_folders", "cache_max_gb", "plantnet_key",
+                    "plantnet_daily_max", "plantnet_min_score", "plantnet_lang"):
             if key in payload:
                 kind = type(getattr(s, key))
                 val = payload[key]
                 if kind is bool:
                     val = val if isinstance(val, bool) else str(val).lower() in ("1", "true", "yes", "on")
                 setattr(s, key, kind(val))
+        if "plantnet_tags" in payload:
+            tags = payload["plantnet_tags"]
+            if isinstance(tags, str):
+                tags = tags.split(",")
+            s.plantnet_tags = sorted({t.strip() for t in tags if t.strip()}, key=str.lower)
+        s.plantnet_key = s.plantnet_key.strip()
+        s.plantnet_daily_max = max(0, min(int(s.plantnet_daily_max), 100000))
         if "perspective_auto_tags" in payload:
             tags = payload["perspective_auto_tags"]
             if isinstance(tags, str):
@@ -234,7 +247,7 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
         return [dict(r) for r in rows]
 
     COLUMNS = ("p.id, p.filename, p.folder, p.root, p.taken_at, p.width, p.height, p.star, p.ops_hash, "
-               "p.ops_source, p.caption")
+               "p.ops_source, p.caption, p.media, p.duration")
 
     def build_filter(f: dict):
         """Filtres d'une vue -> (clause WHERE, paramètres, ORDER BY, paramètres d'ordre)."""
@@ -309,6 +322,18 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
                             tuple(params + order_params + [limit, offset]))
         return {"total": count, "items": [dict(r) for r in rows]}
 
+    @app.get("/api/photos/index")
+    def photo_index(request: Request, pid: int):
+        """Position d'une photo dans une vue (pour la retrouver dans la grille)."""
+        f = dict(request.query_params)
+        ranked = ranked_ids(f)
+        if ranked is not None:
+            return {"index": ranked.index(pid) if pid in ranked else None}
+        clause, params, order, order_params = build_filter(f)
+        r = lib.db.one(f"SELECT rn FROM (SELECT p.id, ROW_NUMBER() OVER (ORDER BY {order}) - 1 rn "
+                       f"FROM photo p{clause}) WHERE id=?", tuple(order_params + params + [pid]))
+        return {"index": r["rn"] if r else None}
+
     @app.get("/api/photos/{pid}")
     def photo_detail(pid: int):
         row = get_photo(pid)
@@ -334,7 +359,29 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
         s = config.settings
         pic = parse_folder_cached(lib.folder_path(row), s.picasa_tilt_deg_per_unit, s.picasa_rotate_clockwise)
         entry = pic.entry(row["filename"]) if pic else None
-        d["picasa"] = {"ini": pic is not None, "found": entry is not None,
+        d["plant"] = plantnet.info(pid)
+        if row["media"] == "video":
+            from . import media
+            info = media.probe(lib.abs_path(row))
+            d["video"] = {"codec": info["codec"], "audio": info["audio"], "container": info["container"],
+                          "playable": media.browser_playable(info)}
+        kinds = []
+        if entry is not None:
+            for o in entry.ops:
+                k = {"crop": "crop", "straighten": "straighten", "rotate90": "rotate"}.get(o.get("op"), "filter")
+                if k not in kinds:
+                    kinds.append(k)
+            if entry.star:
+                kinds.append("star")
+            if entry.caption:
+                kinds.append("caption")
+            if entry.keywords:
+                kinds.append(f"keywords:{len(entry.keywords)}")
+            if entry.faces:
+                kinds.append(f"faces:{len(entry.faces)}")
+            if entry.albums:
+                kinds.append(f"albums:{len(entry.albums)}")
+        d["picasa"] = {"ini": pic is not None, "found": entry is not None, "directives": kinds,
                        "section": next((k for k, v in pic.photos.items() if v is entry), None) if entry else None}
         return d
 
@@ -345,7 +392,7 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
         ops = json.loads(row["ops"] or "[]")
         path = cache.get_or_render(pid, row["ops_hash"] or ops_hash(ops), size,
                                    lambda: render(lib.abs_path(row), ops, size,
-                                                  config.settings.default_f35, row["f35"]))
+                                                  config.settings.default_f35, row["f35"], row["duration"]))
         return FileResponse(path, media_type="image/jpeg",
                             headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
@@ -370,9 +417,62 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
     def original(pid: int):
         return FileResponse(lib.abs_path(get_photo(pid)))
 
+    video_locks: dict[int, threading.Lock] = {}
+    video_locks_guard = threading.Lock()
+
+    # ---------------- Pl@ntNet ----------------
+    @app.get("/api/plantnet")
+    def plantnet_status():
+        return plantnet.status()
+
+    @app.post("/api/plantnet/start")
+    def plantnet_start():
+        try:
+            return plantnet.start()
+        except KeyRejected:
+            raise HTTPException(400, "clé Pl@ntNet manquante")
+
+    @app.post("/api/plantnet/stop")
+    def plantnet_stop():
+        plantnet.stop()
+        return plantnet.status()
+
+    @app.post("/api/plantnet/reset")
+    def plantnet_reset(payload: dict = Body(default={})):
+        return {"reset": plantnet.reset(payload.get("which", "failed"))}
+
+    @app.get("/api/photos/{pid}/video")
+    def video(pid: int):
+        """Flux vidéo lisible par le navigateur : l'original (MP4 H.264...) ou une copie convertie
+        en MP4 (vieux AVI, MJPEG, DivX...), mise en cache. Le fichier d'origine n'est jamais modifié."""
+        from . import media
+        row = get_photo(pid)
+        if row["media"] != "video":
+            raise HTTPException(404, "not a video")
+        src = lib.abs_path(row)
+        info = media.probe(src)
+        if media.browser_playable(info):
+            return FileResponse(src, media_type="video/mp4" if src.suffix.lower() != ".webm" else "video/webm")
+        dst = cache.cache_dir / "video" / f"{pid}_{int(src.stat().st_mtime)}.mp4"
+        with video_locks_guard:
+            lock = video_locks.setdefault(pid, threading.Lock())
+        with lock:
+            if not dst.exists():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                for old in dst.parent.glob(f"{pid}_*.mp4"):
+                    old.unlink(missing_ok=True)
+                try:
+                    media.transcode(src, dst)
+                except Exception as e:
+                    log.exception("conversion vidéo impossible : %s", src)
+                    raise HTTPException(500, f"conversion impossible : {e}")
+        return FileResponse(dst, media_type="video/mp4")
+
     @app.get("/api/photos/{pid}/export")
     def export(pid: int):
         row = get_photo(pid)
+        if row["media"] == "video":
+            return FileResponse(lib.abs_path(row), filename=row["filename"])
         path = _rendered(pid, "full").path
         stem = Path(row["filename"]).stem
         return FileResponse(path, media_type="image/jpeg", filename=f"{stem}_retouche.jpg")
@@ -382,7 +482,8 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
         """Aperçu d'une liste d'opérations non enregistrée (outils de retouche)."""
         row = get_photo(pid)
         size = int(payload.get("size", 1200))
-        img = render(lib.abs_path(row), payload.get("ops", []), size, config.settings.default_f35, row["f35"])
+        img = render(lib.abs_path(row), payload.get("ops", []), size, config.settings.default_f35, row["f35"],
+                     row["duration"])
         return Response(to_jpeg(img, 85), media_type="image/jpeg")
 
     # ---------------------------------------------------------------- directives
@@ -510,7 +611,19 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
     # ---------------------------------------------------------------- interface
     @app.get("/")
     def index():
-        return FileResponse(STATIC / "index.html")
+        # Version dans l'adresse des fichiers de l'interface : une mise à jour est prise
+        # immédiatement, sans vider le cache du navigateur.
+        html = (STATIC / "index.html").read_text(encoding="utf-8")
+        html = html.replace('/static/app.css"', f'/static/app.css?v={__version__}"') \
+                   .replace('/static/app.js"', f'/static/app.js?v={__version__}"')
+        return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+    @app.middleware("http")
+    async def static_revalidate(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/static/") and "/vendor/" not in request.url.path:
+            response.headers["Cache-Control"] = "no-cache"   # revalidation (304 si inchangé)
+        return response
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app

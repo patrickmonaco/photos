@@ -31,8 +31,9 @@ body { display: flex; flex-direction: column; overflow: hidden; }
   background: linear-gradient(transparent, rgba(0,0,0,.65)); opacity: 0; transition: opacity .15s; }
 .tile .name > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tile .name .caption { font-style: italic; opacity: .9; }
-.picasa-missing { color: var(--bs-warning); font-size: .8rem; white-space: nowrap; flex-shrink: 0; cursor: help; }
-.picasa-missing .bi-exclamation { margin-left: -.25rem; }
+/* Pastille « directives Picasa » à droite du nom de fichier */
+.picasa-mark { flex-shrink: 0; cursor: help; display: inline-flex; align-items: center; margin-left: .35rem; }
+.picasa-mark svg { display: block; }
 .tile:hover .name { opacity: 1; }
 #sentinel { height: 1px; }
 
@@ -40,6 +41,14 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 .viewer-stage { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; min-width: 0; overflow: hidden; }
 .viewer-imgwrap { position: relative; max-width: calc(100% - 120px); max-height: calc(100vh - 40px); display: flex; }
 .viewer-imgwrap img.switching { visibility: hidden; }
+/* Vidéos : lecteur à la place de l'image, outils de retouche masqués sauf la rotation */
+.viewer-imgwrap video { max-width: 100%; max-height: calc(100vh - 40px); background: #000; transition: transform .15s ease-out; }
+.viewer.slideshow .viewer-imgwrap video { max-height: 100vh; }
+.viewer.is-video .photo-only, .viewer.is-video #vImg, .viewer.is-video #vFull { display: none !important; }
+.viewer.is-video:not(.slideshow) .slideshow-bar { display: none; }   /* ne masque pas les commandes du lecteur */
+.viewer.is-video .slideshow-bar { bottom: 64px; }
+.tile .vbadge { position: absolute; top: 4px; left: 4px; background: rgba(0,0,0,.6); color: #fff; border-radius: 3px;
+  padding: 1px 6px; font-size: .72rem; display: flex; align-items: center; gap: 4px; }
 .viewer-imgwrap img { max-width: 100%; max-height: calc(100vh - 40px); object-fit: contain; transition: transform .05s linear; user-select: none; -webkit-user-drag: none; }
 .viewer-nav { position: absolute; top: 50%; transform: translateY(-50%); opacity: .6; }
 .viewer-nav:hover { opacity: 1; }
@@ -94,3 +103,8 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 .viewer-imgwrap.zoomed img { transition: none; }
 .viewer-imgwrap.zoomed .img-overlay-btn, .viewer-imgwrap.zoomed .slideshow-bar { display: none; }
 .viewer-imgwrap.zoom-anim img { transition: transform .18s ease-out; }
+
+/* Photo retrouvée depuis la fiche (lien « Dossier ») */
+.tile.located { outline: 3px solid var(--bs-warning); outline-offset: 2px; transition: outline-color .3s; z-index: 2; }
+#vGoFolder { text-decoration: none; }
+#vGoFolder:hover { text-decoration: underline; }
