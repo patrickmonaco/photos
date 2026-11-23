@@ -1,6 +1,6 @@
 [project]
 name = "phototheque"
-version = "0.9.3"
+version = "0.10.3"
 description = "Gestionnaire de photos non destructif, compatible Picasa (FR/EN)"
 requires-python = ">=3.10"
 dependencies = [

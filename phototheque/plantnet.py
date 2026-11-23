@@ -14,7 +14,6 @@ import io
 import json
 import logging
 import os
-import ssl
 import threading
 import time
 import urllib.error
@@ -24,38 +23,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .net import open_url as _open, ssl_context  # noqa: F401  (ssl_context : compatibilité)
+
 log = logging.getLogger("phototheque")
 
 API_URL = os.environ.get("PHOTOTHEQUE_PLANTNET_URL", "https://my-api.plantnet.org").rstrip("/")
-
-
-_SSL_CONTEXT: ssl.SSLContext | None = None
-
-
-def ssl_context() -> ssl.SSLContext:
-    """Contexte TLS qui vérifie les certificats avec le magasin du système (Windows, macOS, Linux).
-
-    Le Python de python.org sous Windows ne lit pas le magasin de certificats de Windows, d'où
-    « CERTIFICATE_VERIFY_FAILED » ; c'est aussi le cas derrière un antivirus ou un proxy d'entreprise
-    qui inspecte HTTPS avec son propre certificat (installé dans Windows). truststore utilise le
-    magasin du système ; à défaut, certifi (certificats de Mozilla). La vérification reste active."""
-    global _SSL_CONTEXT
-    if _SSL_CONTEXT is None:
-        try:
-            import truststore
-            _SSL_CONTEXT = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        except Exception:
-            try:
-                import certifi
-                _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
-            except Exception:
-                _SSL_CONTEXT = ssl.create_default_context()
-    return _SSL_CONTEXT
-
-
-def _open(req, timeout: int):
-    return urllib.request.urlopen(req, timeout=timeout,
-                                  context=ssl_context() if str(getattr(req, "full_url", req)).startswith("https") else None)
 
 
 def utc_day() -> str:

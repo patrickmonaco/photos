@@ -97,7 +97,7 @@ class ModelManager:
     def _fetch(self, url: str, target: Path, key: str) -> None:
         tmp = target.with_suffix(target.suffix + ".part")
         req = urllib.request.Request(url, headers={"User-Agent": "phototheque"})
-        from .plantnet import ssl_context
+        from .net import ssl_context
         with urllib.request.urlopen(req, timeout=60, context=ssl_context()) as r, open(tmp, "wb") as f:
             while chunk := r.read(1 << 20):
                 f.write(chunk)

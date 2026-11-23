@@ -15,6 +15,7 @@ from . import __version__
 from fastapi.staticfiles import StaticFiles
 from .aiservice import AIService
 from .plantnet import KeyRejected, PlantNetService
+from .wordpress import WordPressService, WPError
 from .config import Config
 from .library import Library, ops_hash
 from .metadata import read_camera
@@ -62,6 +63,8 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
     app.state.ai = aisvc
     plantnet = PlantNetService(lib)
     app.state.plantnet = plantnet
+    wordpress = WordPressService(lib)
+    app.state.wordpress = wordpress
     # Les miniatures passent par un nombre limité de rendus simultanés, pour que l'aperçu
     # de la visionneuse ne fasse pas la queue derrière une grille entière.
     thumb_slots = threading.Semaphore(3)
@@ -144,7 +147,9 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
                     "perspective_strength", "theme", "slideshow_interval", "ai_clip", "ai_faces",
                     "ai_tag_language", "ai_tag_threshold", "face_model", "face_cluster_threshold",
                     "enhance_strength", "watch_folders", "cache_max_gb", "plantnet_key",
-                    "plantnet_daily_max", "plantnet_min_score", "plantnet_lang"):
+                    "plantnet_daily_max", "plantnet_min_score", "plantnet_lang", "wordpress_url",
+                    "wordpress_user", "wordpress_app_password", "wordpress_max_size", "wordpress_quality",
+                    "wordpress_status"):
             if key in payload:
                 kind = type(getattr(s, key))
                 val = payload[key]
@@ -157,6 +162,11 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
                 tags = tags.split(",")
             s.plantnet_tags = sorted({t.strip() for t in tags if t.strip()}, key=str.lower)
         s.plantnet_key = s.plantnet_key.strip()
+        s.wordpress_url = s.wordpress_url.strip().rstrip("/")
+        s.wordpress_max_size = max(320, min(int(s.wordpress_max_size), 8000))
+        s.wordpress_quality = max(50, min(int(s.wordpress_quality), 100))
+        if s.wordpress_status not in ("publish", "draft", "private"):
+            s.wordpress_status = "publish"
         s.plantnet_daily_max = max(0, min(int(s.plantnet_daily_max), 100000))
         if "perspective_auto_tags" in payload:
             tags = payload["perspective_auto_tags"]
@@ -419,6 +429,37 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
 
     video_locks: dict[int, threading.Lock] = {}
     video_locks_guard = threading.Lock()
+
+    # ---------------- WordPress ----------------
+    def wp_fail(e: WPError):
+        raise HTTPException(400 if e.code != "auth" else 401, {"code": e.code, "detail": e.detail})
+
+    @app.post("/api/wordpress/test")
+    def wordpress_test():
+        try:
+            return wordpress.test()
+        except WPError as e:
+            wp_fail(e)
+
+    @app.get("/api/wordpress/status")
+    def wordpress_status():
+        return wordpress.status()
+
+    @app.get("/api/albums/{aid}/wordpress")
+    def wordpress_album(aid: str):
+        return wordpress.album_info(aid)
+
+    @app.post("/api/albums/{aid}/wordpress")
+    def wordpress_publish(aid: str, payload: dict = Body(default={})):
+        try:
+            return wordpress.start(aid, payload)
+        except WPError as e:
+            wp_fail(e)
+
+    @app.post("/api/wordpress/stop")
+    def wordpress_stop():
+        wordpress.stop()
+        return wordpress.status()
 
     # ---------------- Pl@ntNet ----------------
     @app.get("/api/plantnet")

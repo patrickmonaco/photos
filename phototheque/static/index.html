@@ -305,6 +305,32 @@
         </div>
         <div class="small mt-1" id="sPnState"></div>
 
+        <h6 class="mt-4"><i class="bi bi-cloud-arrow-up me-1"></i><span data-i18n="wp.title"></span></h6>
+        <div class="form-text mb-2" data-i18n="wp.help"></div>
+        <div class="row g-3">
+          <div class="col-md-12"><label class="form-label small" data-i18n="wp.url"></label>
+            <input class="form-control form-control-sm" id="sWpUrl" placeholder="https://monblog.fr" spellcheck="false"></div>
+          <div class="col-md-6"><label class="form-label small" data-i18n="wp.user"></label>
+            <input class="form-control form-control-sm" id="sWpUser" autocomplete="off" spellcheck="false"></div>
+          <div class="col-md-6"><label class="form-label small" data-i18n="wp.password"></label>
+            <div class="input-group input-group-sm">
+              <input type="password" class="form-control" id="sWpPass" autocomplete="off" spellcheck="false" placeholder="xxxx xxxx xxxx xxxx xxxx xxxx">
+              <button class="btn btn-outline-secondary" type="button" id="sWpPassShow"><i class="bi bi-eye"></i></button></div></div>
+          <div class="col-md-4"><label class="form-label small" data-i18n="wp.maxSize"></label>
+            <input type="number" min="320" max="8000" step="64" class="form-control form-control-sm" id="sWpSize"></div>
+          <div class="col-md-4"><label class="form-label small" data-i18n="wp.quality"></label>
+            <input type="number" min="50" max="100" step="1" class="form-control form-control-sm" id="sWpQuality"></div>
+          <div class="col-md-4"><label class="form-label small" data-i18n="wp.status"></label>
+            <select class="form-select form-select-sm" id="sWpStatus">
+              <option value="publish" data-i18n="wp.status.publish"></option>
+              <option value="draft" data-i18n="wp.status.draft"></option>
+              <option value="private" data-i18n="wp.status.private"></option></select></div>
+        </div>
+        <div class="d-flex align-items-center gap-2 mt-2">
+          <button class="btn btn-sm btn-outline-primary" id="sWpTest"><i class="bi bi-plug"></i> <span data-i18n="wp.test"></span></button>
+          <span class="small" id="sWpTestResult"></span>
+        </div>
+
         <div class="credits text-center small text-body-secondary mt-4 pt-3 border-top">
           <div>Designed by GPM Factory</div>
           <div>Built by Claude Anthropic</div>
@@ -327,6 +353,46 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
       <div class="list-group list-group-flush" id="albumPickerList"></div>
       <div class="modal-footer"><button class="btn btn-sm btn-outline-primary w-100" id="albumPickerNew"><i class="bi bi-plus"></i> <span data-i18n="nav.newAlbum"></span></button></div>
+    </div>
+  </div>
+</div>
+
+<!-- Publication d'un album sur WordPress -->
+<div class="modal fade" id="wpPublish" tabindex="-1">
+  <div class="modal-dialog modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title h6"><i class="bi bi-cloud-arrow-up me-1"></i><span data-i18n="wp.publishTitle"></span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <div class="small mb-2" id="wpInfo"></div>
+        <div id="wpForm">
+          <label class="form-label small" data-i18n="wp.postTitle"></label>
+          <input class="form-control form-control-sm mb-2" id="wpTitle">
+          <label class="form-label small" data-i18n="wp.intro"></label>
+          <textarea class="form-control form-control-sm mb-2" id="wpIntro" rows="3"></textarea>
+          <div class="row g-2">
+            <div class="col-6"><label class="form-label small" data-i18n="wp.status"></label>
+              <select class="form-select form-select-sm" id="wpStatus">
+                <option value="publish" data-i18n="wp.status.publish"></option>
+                <option value="draft" data-i18n="wp.status.draft"></option>
+                <option value="private" data-i18n="wp.status.private"></option></select></div>
+            <div class="col-6"><label class="form-label small" data-i18n="wp.columns"></label>
+              <input type="number" min="1" max="8" class="form-control form-control-sm" id="wpColumns" value="3"></div>
+          </div>
+          <div class="form-check mt-2"><input class="form-check-input" type="checkbox" id="wpCaptions" checked>
+            <label class="form-check-label small" for="wpCaptions" data-i18n="wp.captions"></label></div>
+          <div class="form-text" data-i18n="wp.privacy"></div>
+        </div>
+        <div id="wpProgress" class="d-none mt-2">
+          <div class="progress" style="height: 6px"><div class="progress-bar" id="wpBar" style="width: 0%"></div></div>
+          <div class="small mt-1" id="wpState"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal" data-i18n="common.close"></button>
+        <button class="btn btn-outline-secondary btn-sm d-none" id="wpStop" data-i18n="plantnet.stop"></button>
+        <button class="btn btn-primary btn-sm" id="wpGo"><i class="bi bi-cloud-arrow-up"></i> <span data-i18n="wp.publish"></span></button>
+      </div>
     </div>
   </div>
 </div>

@@ -215,7 +215,8 @@ function renderAlbums() {
   if (!state.albums.length) html += `<div class="side-heading">${esc(t("nav.noAlbums"))}</div>`;
   html += state.albums.map((a) => sideItem(a.name, { type: "album", album: a.id }, {
     icon: a.source === "picasa" ? "bi-collection-play" : "bi-collection", count: a.n,
-    extra: `<span class="album-menu ms-1"><i class="bi bi-pencil" data-rename="${esc(a.id)}" title="${esc(t("common.rename"))}"></i>
+    extra: `<span class="album-menu ms-1"><i class="bi bi-cloud-arrow-up" data-wp-publish="${esc(a.id)}" title="${esc(t("wp.publishTitle"))}"></i>
+            <i class="bi bi-pencil ms-1" data-rename="${esc(a.id)}" title="${esc(t("common.rename"))}"></i>
             <i class="bi bi-trash ms-1" data-delete="${esc(a.id)}" title="${esc(t("common.delete"))}"></i></span>`,
   })).join("");
   $("#panel-albums").innerHTML = html;
@@ -270,6 +271,12 @@ document.addEventListener("click", async (e) => {
     if (state.view.type === "folder" && state.view.root === root
         && (!folder || state.view.folder === folder || state.view.folder.startsWith(`${folder}/`))) state.view = { type: "all" };
     setTimeout(pollScan, 300);
+    return;
+  }
+  const wpb = e.target.closest("[data-wp-publish]");
+  if (wpb) {
+    e.preventDefault(); e.stopPropagation();
+    openWpPublish(state.albums.find((x) => x.id === wpb.dataset.wpPublish));
     return;
   }
   const ren = e.target.closest("[data-rename]");
@@ -1542,6 +1549,14 @@ async function openSettings() {
   $("#sPnMax").value = s.plantnet_daily_max;
   $("#sPnScore").value = Math.round((s.plantnet_min_score ?? 0.2) * 100);
   $("#sPnLang").value = s.plantnet_lang || "";
+  $("#sWpUrl").value = s.wordpress_url || "";
+  $("#sWpUser").value = s.wordpress_user || "";
+  $("#sWpPass").value = s.wordpress_app_password || "";
+  $("#sWpPass").type = "password";
+  $("#sWpSize").value = s.wordpress_max_size;
+  $("#sWpQuality").value = s.wordpress_quality;
+  $("#sWpStatus").value = s.wordpress_status || "publish";
+  $("#sWpTestResult").textContent = "";
   refreshPlantNet();
   bootstrap.Modal.getOrCreateInstance($("#settings")).show();
   setTimeout(refreshAI, 200);
@@ -1586,6 +1601,91 @@ $("#sRootAdd").onclick = async () => {
   await openSettings();
   startScan();
 };
+/* ---- WordPress ---- */
+const wpSettings = () => ({
+  wordpress_url: $("#sWpUrl").value.trim(), wordpress_user: $("#sWpUser").value.trim(),
+  wordpress_app_password: $("#sWpPass").value.trim(),
+  wordpress_max_size: Math.round(+$("#sWpSize").value || 2048), wordpress_quality: Math.round(+$("#sWpQuality").value || 88),
+  wordpress_status: $("#sWpStatus").value,
+});
+const wpErrorText = (detail) => {
+  const code = detail && detail.code;
+  const known = ["auth", "config", "network", "not_json", "not_found", "empty", "busy", "stopped"];
+  return known.includes(code) ? t(`wp.err.${code}`) : `${t("wp.err.other")} ${code || ""} ${detail && detail.detail ? "— " + detail.detail : ""}`;
+};
+$("#sWpPassShow").onclick = () => { const i = $("#sWpPass"); i.type = i.type === "password" ? "text" : "password"; };
+$("#sWpTest").onclick = async () => {
+  const out = $("#sWpTestResult");
+  out.className = "small"; out.textContent = t("wp.testing");
+  await api("/api/settings", { method: "PUT", json: wpSettings() });
+  const r = await fetch("/api/wordpress/test", { method: "POST" });
+  const d = await r.json();
+  if (r.ok && !d.ok) {
+    out.className = "small text-danger d-block";
+    out.innerHTML = (d.checks || []).map((c) => `<div class="mb-1"><i class="bi bi-exclamation-triangle"></i> `
+      + esc(t(`wp.check.${c.key}`, { home: c.home || d.home || "", code: c.code || "", detail: c.detail || "" }))
+      + (c.code && !["home_http", "app_passwords_unavailable"].includes(c.key) ? ` <span class="text-body-secondary">(${esc(c.code)})</span>` : "")
+      + `</div>`).join("");
+  } else if (r.ok) {
+    const warn = !d.can_upload || !d.can_publish;
+    out.className = `small ${warn ? "text-warning" : "text-success"}`;
+    out.textContent = t(warn ? "wp.testRights" : "wp.testOk", { name: d.name || "" });
+  } else {
+    out.className = "small text-danger";
+    out.textContent = wpErrorText(d.detail);
+  }
+};
+
+const wp = { album: null, timer: null };
+async function openWpPublish(a) {
+  wp.album = a;
+  const info = await api(`/api/albums/${a.id}/wordpress`);
+  const st = await api("/api/wordpress/status");
+  $("#wpTitle").value = a.name;
+  $("#wpIntro").value = a.description || "";
+  $("#wpStatus").value = state.settings.wordpress_status || "publish";
+  let html = esc(t("wp.count", { n: info.photos }));
+  if (info.videos) html += ` · ${esc(t("wp.videosSkipped", { n: info.videos }))}`;
+  if (info.post) html += `<br><i class="bi bi-arrow-repeat"></i> ${esc(t("wp.willUpdate"))} <a href="${esc(info.post.link || "#")}" target="_blank" rel="noopener">${esc(info.post.link || "")}</a>`;
+  if (!info.configured) html += `<div class="text-warning mt-1">${esc(t("wp.notConfigured"))}</div>`;
+  $("#wpInfo").innerHTML = html;
+  $("#wpGo").disabled = !info.configured || !info.photos;
+  $("#wpGo").classList.remove("d-none");
+  $("#wpProgress").classList.add("d-none");
+  $("#wpForm").classList.remove("d-none");
+  bootstrap.Modal.getOrCreateInstance($("#wpPublish")).show();
+  if (st.running) { $("#wpForm").classList.add("d-none"); pollWp(); }
+}
+async function pollWp() {
+  clearTimeout(wp.timer);
+  const st = await api("/api/wordpress/status");
+  $("#wpProgress").classList.remove("d-none");
+  $("#wpBar").style.width = `${st.total ? Math.round(100 * st.done / st.total) : 0}%`;
+  $("#wpBar").classList.toggle("bg-success", st.message === "done");
+  $("#wpBar").classList.toggle("bg-danger", !!st.message && st.message !== "done");
+  let html = esc(t("wp.progress", { done: st.done, total: st.total, up: st.uploaded, reused: st.reused }));
+  if (st.message === "done") {
+    html += `<br><span class="text-success"><i class="bi bi-check-circle"></i> ${esc(t("wp.done"))}</span> <a href="${esc(st.link)}" target="_blank" rel="noopener">${esc(st.link)}</a>`;
+  } else if (st.message) {
+    html += `<br><span class="text-danger">${esc(wpErrorText({ code: st.message, detail: st.detail }))}</span>`;
+  }
+  $("#wpState").innerHTML = html;
+  $("#wpStop").classList.toggle("d-none", !st.running);
+  $("#wpGo").disabled = st.running;
+  $("#wpGo").classList.toggle("d-none", st.message === "done");
+  if (st.running) wp.timer = setTimeout(pollWp, 800);
+}
+$("#wpGo").onclick = async () => {
+  const r = await fetch(`/api/albums/${wp.album.id}/wordpress`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: $("#wpTitle").value.trim(), intro: $("#wpIntro").value, status: $("#wpStatus").value,
+                           columns: +$("#wpColumns").value || 3, captions: $("#wpCaptions").checked }) });
+  if (!r.ok) { const d = await r.json(); toast(wpErrorText(d.detail)); return; }
+  $("#wpForm").classList.add("d-none");
+  pollWp();
+};
+$("#wpStop").onclick = () => api("/api/wordpress/stop", { method: "POST" });
+$("#wpPublish").addEventListener("hidden.bs.modal", () => clearTimeout(wp.timer));
+
 /* ---- Pl@ntNet ---- */
 const plantnetSettings = () => ({
   plantnet_key: $("#sPnKey").value.trim(), plantnet_tags: $("#sPnTags").value,
@@ -1653,7 +1753,7 @@ $("#sSave").onclick = async () => {
     ai_clip: $("#sAiClip").checked, ai_faces: $("#sAiFaces").checked, face_model: $("#sFaceModel").value,
     ai_tag_language: $("#sTagLang").value, ai_tag_threshold: +$("#sTagThreshold").value,
     watch_folders: $("#sWatch").checked, enhance_strength: +$("#sEnhanceStrength").value / 100,
-    cache_max_gb: +$("#sCacheMax").value, ...plantnetSettings() } });
+    cache_max_gb: +$("#sCacheMax").value, ...plantnetSettings(), ...wpSettings() } });
   applyTheme(state.settings.theme);
   toast(t("settings.saved"));
   bootstrap.Modal.getOrCreateInstance($("#settings")).hide();

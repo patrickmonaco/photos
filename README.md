@@ -127,6 +127,39 @@ Tout tourne en local avec ONNX Runtime (GPU utilisé si disponible : CUDA, ou Di
   (`vision_model.onnx`, `text_model.onnx`, `tokenizer.json`) et `<données>/models/buffalo_l/`
   (`det.onnx` = det_10g, `rec.onnx` = w600k_r50).
 
+## Publication d'un album sur WordPress
+
+Réglages › Publication sur WordPress : l'adresse du blog, l'identifiant et un **mot de passe
+d'application** (dans WordPress : Comptes › Profil › Mots de passe d'application ; WordPress 5.6
+ou plus, site en HTTPS). Le bouton « Tester la connexion » vérifie aussi que le compte peut
+envoyer des médias et publier.
+
+Dans l'onglet Albums, l'icône nuage d'un album ouvre la publication : titre, introduction,
+statut (public par défaut, brouillon ou privé), nombre de colonnes, reprise des légendes.
+
+- Chaque photo est envoyée dans la médiathèque telle qu'affichée (retouches appliquées), réduite à
+  2048 px de côté par défaut, **sans EXIF** (ni position GPS ni appareil). Les vidéos sont ignorées.
+- L'article contient un bloc Galerie (éditeur de blocs) dans l'ordre de l'album, avec les légendes ;
+  la première photo devient l'image mise en avant.
+- Republier un album met à jour son article, et ne renvoie que les photos nouvelles ou retouchées
+  depuis le dernier envoi.
+- Sites en permaliens simples : l'adresse `?rest_route=` est utilisée automatiquement.
+
+**« Tester la connexion » refuse les identifiants ?** Le test indique la cause :
+
+- *Adresse en http* : dans WordPress, Réglages › Général, « Adresse web de WordPress » et
+  « Adresse web du site » doivent commencer par `https://`. Sinon WordPress peut ne pas détecter le
+  HTTPS et désactiver les mots de passe d'application.
+- *Aucun identifiant reçu* : l'hébergeur (OVH notamment, PHP en CGI/FastCGI) supprime l'en-tête
+  `Authorization`. Solution la plus sûre : copier `wordpress/phototheque-auth.php` (fourni avec
+  la Photothèque) dans `wp-content/mu-plugins/` du blog (créer le dossier au besoin). Cette petite
+  extension « must-use », active sans manipulation, lit les identifiants dans l'en-tête de secours
+  `X-Phototheque-Auth` que la Photothèque envoie aussi ; WordPress les vérifie comme d'habitude.
+  Alternative selon l'hébergement, en tête du `.htaccess` (sur une seule ligne) :
+  `SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1` ou `CGIPassAuth On`.
+- *Mot de passe refusé* : il faut un mot de passe d'application (pas celui du compte) et
+  l'identifiant de connexion (pas le nom affiché).
+
 ## Identification des plantes (Pl@ntNet)
 
 Service en ligne [Pl@ntNet](https://my.plantnet.org) (clé personnelle, plan gratuit : 500

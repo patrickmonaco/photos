@@ -67,6 +67,13 @@ class Settings:
     plantnet_daily_max: int = 500
     plantnet_lang: str = ""            # vide = langue de l'interface
     plantnet_min_score: float = 0.2    # en dessous, pas de légende (résultat incertain)
+    # WordPress : publication d'un album (mot de passe d'application, API REST)
+    wordpress_url: str = ""
+    wordpress_user: str = ""
+    wordpress_app_password: str = ""
+    wordpress_max_size: int = 2048     # côté le plus long des images envoyées (px)
+    wordpress_quality: int = 88
+    wordpress_status: str = "publish"  # 'publish' (public) | 'draft' | 'private'
     settings_version: int = 3
 
 

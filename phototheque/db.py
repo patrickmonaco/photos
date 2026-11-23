@@ -7,6 +7,25 @@ import threading
 from pathlib import Path
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS wp_media (       -- photos envoyées dans la médiathèque WordPress
+    photo_id   INTEGER NOT NULL REFERENCES photo(id) ON DELETE CASCADE,
+    site       TEXT NOT NULL,
+    ops_hash   TEXT NOT NULL,                -- retouches au moment de l'envoi
+    size       INTEGER NOT NULL,
+    media_id   INTEGER NOT NULL,
+    url        TEXT,
+    at         TEXT,
+    PRIMARY KEY (photo_id, site)
+);
+CREATE TABLE IF NOT EXISTS wp_post (        -- article WordPress d'un album
+    album_id   TEXT NOT NULL,
+    site       TEXT NOT NULL,
+    post_id    INTEGER NOT NULL,
+    link       TEXT,
+    status     TEXT,
+    at         TEXT,
+    PRIMARY KEY (album_id, site)
+);
 CREATE TABLE IF NOT EXISTS plant_id (
     photo_id   INTEGER PRIMARY KEY REFERENCES photo(id) ON DELETE CASCADE,
     status     TEXT NOT NULL,        -- 'ok' | 'low' (score trop faible) | 'notfound' | 'error'
