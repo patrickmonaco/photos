@@ -133,7 +133,7 @@ def test_faces(env):
     # Renommer le groupe : écrit le nom dans les directives des deux photos
     c.post(f"/api/faces/clusters/{eileen['id']}/name", json={"name": "Eileen M. Collins"})
     side = json.loads((lib / "Portraits" / ".phototheque.json").read_text(encoding="utf-8"))
-    assert side["photos"]["astro2.jpg"]["people"] == ["Eileen M. Collins"]
+    assert [f["person"] for f in side["photos"]["astro2.jpg"]["faces"]] == ["Eileen M. Collins"]
     assert c.get("/api/photos", params={"cluster": eileen["id"]}).json()["total"] == 2
     # Les photos sans visage n'ont pas de visage IA
     assert c.get("/api/ai/status").json()["faces"] == 2
@@ -158,6 +158,7 @@ def test_delete_face_cluster(env):
     assert "Astronaute" not in names
     side = json.loads((lib / "Portraits" / ".phototheque.json").read_text(encoding="utf-8"))
     assert "people" not in side["photos"].get("astro2.jpg", {})
+    assert "faces" not in side["photos"].get("astro2.jpg", {})
     # Les visages ignorés ne reforment pas de groupe au traitement suivant
     svc.enqueue_missing(); svc.process_pending()
     assert c.get("/api/faces/clusters").json() == []
@@ -215,3 +216,61 @@ def test_photo_detail_never_waits_for_writer(env):
     release.set()
     th.join()
     assert r.status_code == 200 and r.json()["filename"] == "IMG_0001.jpg" and elapsed < 2
+
+
+@pytest.mark.skipif(not (FACE_MODELS / "det.onnx").exists(), reason="modèles InsightFace absents")
+def test_face_management(env):
+    c, lib, svc, cfg = env
+    d = cfg.data_dir / "models" / "buffalo_l"
+    d.mkdir(parents=True)
+    for f in ("det.onnx", "rec.onnx"):
+        shutil.copy(FACE_MODELS / f, d / f)
+    c.put("/api/settings", json={"ai_faces": True})
+    svc.process_pending()
+    a1, a2 = pid(c, "astro1.jpg"), pid(c, "astro2.jpg")
+    side_path = lib / "Portraits" / ".phototheque.json"
+
+    def ai_face(p):
+        return next(f for f in c.get(f"/api/photos/{p}").json()["faces"] if f["source"] == "ai")
+
+    def reanalyse():
+        svc.db.execute("DELETE FROM job WHERE type='faces'")
+        svc.enqueue_missing()
+        svc.process_pending()
+
+    f2 = ai_face(a2)
+    assert f2["view"] and f2["person"] == "Eileen Collins"
+    eileen = f2["cluster_id"]
+    assert c.get(f"/api/faces/clusters/{eileen}/faces").json()["total"] == 2
+
+    # « Ce n'est pas cette personne » : sorti du groupe, nom retiré de la photo, décision durable
+    c.post("/api/faces/update", json={"face_ids": [f2["id"]], "action": "unassign"})
+    assert "Eileen Collins" not in {t["name"] for t in c.get(f"/api/photos/{a2}").json()["tags"]}
+    side = json.loads(side_path.read_text(encoding="utf-8"))
+    assert side["photos"]["astro2.jpg"]["faces"][0].get("unknown")
+    reanalyse()
+    f2 = ai_face(a2)
+    assert f2["cluster_id"] == -1 and f2["person"] is None and f2["manual"]
+
+    # Nommer un visage : nouveau groupe nommé, tag posé, toujours là après une nouvelle analyse
+    r = c.post("/api/faces/update", json={"face_ids": [f2["id"]], "action": "assign", "name": "Pilote"}).json()
+    assert r["name"] == "Pilote"
+    reanalyse()
+    f2 = ai_face(a2)
+    assert f2["person"] == "Pilote"
+    assert ("Pilote", "face") in {(t["name"], t["source"]) for t in c.get(f"/api/photos/{a2}").json()["tags"]}
+    assert "Pilote" in c.get("/api/faces/names").json()
+
+    # Fusion : le groupe Pilote rejoint Eileen Collins
+    c.post(f"/api/faces/clusters/{eileen}/merge", json={"others": [f2["cluster_id"]]})
+    assert ai_face(a2)["person"] == "Eileen Collins"
+    assert {cl["name"] for cl in c.get("/api/faces/clusters").json()} == {"Eileen Collins"}
+
+    # Pas un visage : masqué, hors groupe, durable
+    f1 = ai_face(a1)
+    c.post("/api/faces/update", json={"face_ids": [f1["id"]], "action": "ignore"})
+    reanalyse()
+    f1 = ai_face(a1)
+    assert f1["ignored"] and f1["cluster_id"] == -1
+    assert json.loads(side_path.read_text(encoding="utf-8"))["photos"]["astro1.jpg"]["faces"][0]["ignore"]
+    assert c.get(f"/api/faces/clusters/{eileen}/faces").json()["total"] == 1

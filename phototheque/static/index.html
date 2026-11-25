@@ -53,6 +53,11 @@
     <div class="toolbar border-bottom px-3 py-2 d-flex align-items-center gap-3 flex-wrap">
       <h1 id="viewTitle" class="h6 mb-0 text-truncate"></h1>
       <span id="viewCount" class="small text-body-secondary"></span>
+      <select class="form-select form-select-sm w-auto d-none" id="viewSort" data-i18n-title="view.sort">
+        <option value="" data-i18n="view.sort.default"></option>
+        <option value="date_desc" data-i18n="view.sort.date_desc"></option>
+        <option value="date_asc" data-i18n="view.sort.date_asc"></option>
+      </select>
       <div class="form-check form-switch small mb-0 d-none" id="subfoldersWrap">
         <input class="form-check-input" type="checkbox" id="subfolders" checked>
         <label class="form-check-label" for="subfolders" data-i18n="view.subfolders"></label>
@@ -63,6 +68,10 @@
         <button class="btn btn-sm btn-outline-danger" type="button" id="clusterDelete" data-i18n-title="faces.delete"><i class="bi bi-trash"></i></button>
         <i class="bi bi-info-circle text-body-secondary" data-i18n-title="faces.hint"></i>
       </form>
+      <div class="btn-group btn-group-sm d-none" id="clusterMode" role="group">
+        <button class="btn btn-outline-secondary active" data-mode="photos"><i class="bi bi-images"></i> <span data-i18n="faces.modePhotos"></span></button>
+        <button class="btn btn-outline-secondary" data-mode="faces"><i class="bi bi-person-square"></i> <span data-i18n="faces.modeFaces"></span></button>
+      </div>
       <button class="btn btn-sm btn-outline-secondary" id="btnSlideshow"><i class="bi bi-play-circle"></i> <span data-i18n="slideshow.start"></span></button>
       <div id="selectionBar" class="ms-auto d-flex gap-2 align-items-center d-none">
         <span id="selCount" class="small fw-semibold"></span>
@@ -72,6 +81,26 @@
         <button class="btn btn-sm btn-link" id="selNone" data-i18n="sel.none"></button>
       </div>
       <button class="btn btn-sm btn-link ms-auto" id="selAll" data-i18n="sel.all"></button>
+    </div>
+    <div id="faceSuggest" class="face-suggest d-none"></div>
+    <div id="faceGridWrap" class="d-none">
+      <div class="face-selbar d-flex flex-wrap gap-2 align-items-center px-3 py-2 border-bottom">
+        <span class="small fw-semibold" id="fgCount"></span>
+        <select class="form-select form-select-sm w-auto" id="fgSort">
+          <option value="date_desc" data-i18n="faces.sort.date_desc"></option>
+          <option value="date_asc" data-i18n="faces.sort.date_asc"></option>
+          <option value="score" data-i18n="faces.sort.score"></option>
+        </select>
+        <button class="btn btn-sm btn-link p-0" id="fgAll" data-i18n="sel.all"></button>
+        <button class="btn btn-sm btn-link p-0" id="fgNone" data-i18n="sel.none"></button>
+        <div class="vr"></div>
+        <input class="form-control form-control-sm" id="fgName" list="faceNames" style="width:200px" data-i18n-placeholder="faces.moveTo">
+        <button class="btn btn-sm btn-primary" id="fgAssign" data-i18n="faces.assign"></button>
+        <button class="btn btn-sm btn-outline-secondary" id="fgUnassign" data-i18n="faces.notThisPerson"></button>
+        <button class="btn btn-sm btn-outline-danger" id="fgIgnore" data-i18n="faces.notAFace"></button>
+      </div>
+      <div id="faceGrid" class="face-grid p-3"></div>
+      <div class="text-center pb-3"><button class="btn btn-sm btn-outline-secondary d-none" id="fgMore" data-i18n="faces.more"></button></div>
     </div>
     <div id="grid" class="grid"></div>
     <div id="sentinel"></div>
@@ -89,9 +118,17 @@
           <img id="vImg" alt="" data-i18n-title="viewer.zoomHint">
           <video id="vVideo" class="d-none" controls playsinline preload="metadata"></video>
           <div class="straighten-grid d-none" id="vGrid"></div>
-          <div class="crop-box d-none" id="vCrop"></div>
+          <div class="crop-box d-none" id="vCrop">
+            <div class="crop-grid"></div>
+            <span class="crop-h" data-h="nw"></span><span class="crop-h" data-h="n"></span><span class="crop-h" data-h="ne"></span>
+            <span class="crop-h" data-h="w"></span><span class="crop-h" data-h="e"></span>
+            <span class="crop-h" data-h="sw"></span><span class="crop-h" data-h="s"></span><span class="crop-h" data-h="se"></span>
+          </div>
           <div class="viewer-loading d-none" id="vLoading"><div class="spinner-border text-light"></div></div>
           <button class="img-overlay-btn" id="vFull" data-i18n-title="viewer.fullscreen"><i class="bi bi-arrows-fullscreen"></i></button>
+          <button class="img-overlay-btn faces-btn" id="vFacesBtn" data-i18n-title="faces.toggle"><i class="bi bi-person-bounding-box"></i></button>
+          <div class="face-layer d-none" id="vFaces"></div>
+          <div class="face-menu d-none" id="faceMenu"></div>
           <!-- Barre du diaporama, en filigrane sur le bas de la photo -->
           <div class="slideshow-bar" id="ssBar">
             <button class="btn btn-sm btn-dark" id="ssPrev"><i class="bi bi-skip-backward-fill"></i></button>
@@ -122,6 +159,13 @@
         <div id="vTags" class="mb-2"></div>
         <input class="form-control form-control-sm mb-3" id="vTagInput" list="tagList" data-i18n-placeholder="viewer.addTag">
         <datalist id="tagList"></datalist>
+        <datalist id="faceNames"></datalist>
+
+        <div id="vFacesSection" class="d-none">
+          <div class="small fw-semibold mb-1"><span data-i18n="faces.onPhoto"></span>
+            <button class="btn btn-sm btn-link p-0 ms-1 align-baseline" id="vFacesShow"></button></div>
+          <div id="vFacesList" class="d-flex flex-wrap gap-1 mb-3"></div>
+        </div>
 
         <div class="small fw-semibold mb-1" data-i18n="viewer.albums"></div>
         <div id="vAlbums" class="mb-3 small"></div>
@@ -141,7 +185,23 @@
           <button class="btn btn-outline-secondary photo-only" id="eCropRemove" data-i18n-title="viewer.cropRemove"><i class="bi bi-bounding-box-circles"></i></button>
         </div>
         <div class="photo-only">
-        <button class="btn btn-sm btn-primary w-100 mb-3 d-none" id="eCropApply" data-i18n="viewer.cropApply"></button>
+        <div class="crop-bar mb-3 d-none" id="eCropBar">
+          <div class="small text-body-secondary mb-1" data-i18n="viewer.cropHint"></div>
+          <div class="d-flex flex-wrap gap-1 mb-2" id="eCropRatios">
+            <button class="btn btn-sm btn-outline-secondary active" data-ratio="free" data-i18n="viewer.ratioFree"></button>
+            <button class="btn btn-sm btn-outline-secondary" data-ratio="orig" data-i18n="viewer.ratioOrig"></button>
+            <button class="btn btn-sm btn-outline-secondary" data-ratio="1">1:1</button>
+            <button class="btn btn-sm btn-outline-secondary" data-ratio="1.3333">4:3</button>
+            <button class="btn btn-sm btn-outline-secondary" data-ratio="1.5">3:2</button>
+            <button class="btn btn-sm btn-outline-secondary" data-ratio="1.7778">16:9</button>
+            <button class="btn btn-sm btn-outline-secondary" id="eCropFlip" data-i18n-title="viewer.ratioFlip"><i class="bi bi-phone-landscape"></i></button>
+          </div>
+          <div class="d-flex gap-1">
+            <button class="btn btn-sm btn-primary flex-fill" id="eCropApply" data-i18n="viewer.cropApply"></button>
+            <button class="btn btn-sm btn-outline-secondary" id="eCropReset" data-i18n="viewer.cropReset"></button>
+            <button class="btn btn-sm btn-outline-secondary" id="eCropCancel" data-i18n="common.cancel"></button>
+          </div>
+        </div>
 
         <label class="form-label small d-flex justify-content-between mb-0">
           <span data-i18n="viewer.straighten"></span><span id="eStraightenVal">0°</span>
@@ -257,7 +317,11 @@
             <input class="form-control form-control-sm" id="sAutoTags">
             <div class="form-text mb-2" data-i18n="settings.autoTagsHelp"></div>
             <label class="form-label small" data-i18n="settings.enhanceStrength"></label>
-            <input type="number" min="0" max="150" step="5" class="form-control form-control-sm mb-2" id="sEnhanceStrength">
+            <div class="input-group input-group-sm mb-1">
+              <input type="number" min="0" max="150" step="5" class="form-control" id="sEnhanceStrength">
+              <button class="btn btn-outline-secondary" type="button" id="sEnhanceApply" data-i18n="settings.enhanceApply"></button>
+            </div>
+            <div class="form-text mb-2" id="sEnhanceState"></div>
             <label class="form-label small" data-i18n="settings.strength"></label>
             <input type="number" min="0" max="1" step="0.05" class="form-control form-control-sm mb-2" id="sStrength">
             <label class="form-label small" data-i18n="settings.f35"></label>

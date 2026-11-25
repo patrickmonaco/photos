@@ -96,7 +96,9 @@ CREATE TABLE IF NOT EXISTS face (
     source   TEXT NOT NULL,
     score    REAL,                           -- confiance de la détection (IA)
     embedding BLOB,                          -- vecteur ArcFace (float32, normalisé)
-    cluster_id INTEGER                       -- groupe de visages (IA)
+    cluster_id INTEGER,                      -- groupe de visages (IA) ; -1 = hors groupe
+    manual   INTEGER DEFAULT 0,              -- décision de l'utilisateur (nommé, retiré du groupe)
+    ignored  INTEGER DEFAULT 0               -- « ce n'est pas un visage »
 );
 CREATE INDEX IF NOT EXISTS face_photo ON face(photo_id);
 CREATE INDEX IF NOT EXISTS face_cluster_score ON face(cluster_id, score);
@@ -107,6 +109,12 @@ CREATE TABLE IF NOT EXISTS face_cluster (
     name     TEXT,
     centroid BLOB,
     n        INTEGER DEFAULT 0
+);
+-- Suggestions de regroupement écartées par l'utilisateur (« ce n'est pas la même personne »)
+CREATE TABLE IF NOT EXISTS face_cluster_reject (
+    a INTEGER NOT NULL,
+    b INTEGER NOT NULL,
+    PRIMARY KEY (a, b)
 );
 
 -- Vecteurs CLIP des photos et tags automatiques (résultats IA, recalculables).
@@ -191,7 +199,8 @@ class Database:
     _ADDED_COLUMNS = {
         "photo": {"merge_sig": "TEXT", "camera": "TEXT", "exif_orientation": "INTEGER",
                   "media": "TEXT DEFAULT 'image'", "duration": "REAL", "codec": "TEXT"},
-        "face": {"score": "REAL", "embedding": "BLOB", "cluster_id": "INTEGER"},
+        "face": {"score": "REAL", "embedding": "BLOB", "cluster_id": "INTEGER", "manual": "INTEGER DEFAULT 0",
+                 "ignored": "INTEGER DEFAULT 0"},
     }
 
     def _migrate(self) -> None:

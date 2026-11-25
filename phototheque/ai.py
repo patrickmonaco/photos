@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import logging
 import shutil
 import threading
@@ -55,6 +56,9 @@ def _session(path: Path):
     import onnxruntime as ort
     opts = ort.SessionOptions()
     opts.log_severity_level = 3
+    # L'IA travaille en tâche de fond : elle laisse des cœurs libres pour l'affichage des photos.
+    opts.intra_op_num_threads = max(1, (os.cpu_count() or 2) // 2)
+    opts.inter_op_num_threads = 1
     providers = [p for p in ("CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider")
                  if p in ort.get_available_providers()]
     return ort.InferenceSession(str(path), sess_options=opts, providers=providers)

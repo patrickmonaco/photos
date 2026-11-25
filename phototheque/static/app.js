@@ -77,6 +77,35 @@ const monthName = (m) => new Intl.DateTimeFormat(state.lang, { month: "long" }).
 const fmtDate = (iso) => iso ? new Intl.DateTimeFormat(state.lang, { dateStyle: "long", timeStyle: "short" }).format(new Date(iso)) : "";
 const fmtDay = (y, m, d) => new Intl.DateTimeFormat(state.lang, { dateStyle: "full" }).format(new Date(y, m - 1, d));
 const weekday = (y, m, d) => new Intl.DateTimeFormat(state.lang, { weekday: "long" }).format(new Date(y, m - 1, d));
+// Les pastilles (amélioration, Picasa, favori, vidéo) sont posées sur la photo elle-même, et non dans
+// les bandes vides autour d'une photo en largeur ou en hauteur dans sa case carrée.
+// Même pastille que dans la fiche de propriétés (camembert générique, pas le logo Picasa)
+const PICASA_PIE = (() => {
+  const cols = ["#e8453c", "#f39c12", "#f7d038", "#3cba54", "#4285f4"];
+  const pt = (a) => `${(8 + 7 * Math.cos(a)).toFixed(2)} ${(8 + 7 * Math.sin(a)).toFixed(2)}`;
+  const parts = cols.map((c, i) => {
+    const a0 = -Math.PI / 2 + 2 * Math.PI * i / 5, a1 = a0 + 2 * Math.PI / 5;
+    return `<path d="M8 8L${pt(a0)}A7 7 0 0 1 ${pt(a1)}Z" fill="${c}"/>`;
+  }).join("");
+  return `<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">${parts}</svg>`;
+})();
+
+// Date et heure de prise de vue sous la vignette (le nom de fichier reste en infobulle)
+function tileDate(it) {
+  if (!it.taken_at) return "";
+  const d = new Date(it.taken_at);
+  if (isNaN(d)) return it.taken_at;
+  return d.toLocaleString(state.lang === "en" ? "en-GB" : "fr-FR", { dateStyle: "short", timeStyle: "short" });
+}
+
+function placeBadges(tile, img) {
+  const r = img.naturalWidth / img.naturalHeight || 1;
+  const dy = r > 1 ? (1 - 1 / r) / 2 * 100 : 0, dx = r < 1 ? (1 - r) / 2 * 100 : 0;
+  const b = tile.querySelector(".badges"), v = tile.querySelector(".vbadge");
+  if (b) Object.assign(b.style, { top: `calc(${dy}% + 4px)`, right: `calc(${dx}% + 4px)` });
+  if (v) Object.assign(v.style, { top: `calc(${dy}% + 4px)`, left: `calc(${dx}% + 4px)` });
+}
+
 function fmtDuration(sec) {
   if (sec == null || isNaN(sec)) return "";
   sec = Math.round(sec);
@@ -238,11 +267,15 @@ function renderFaces() {
     $("#facesAll").onchange = (e) => { state.facesAll = e.target.checked; loadSidebar(); };
     return;
   }
-  $("#panel-faces").innerHTML = toggle + state.clusters.map((c) =>
-    `<a href="#" class="side-item face" data-view='${esc(JSON.stringify({ type: "cluster", id: c.id }))}'>
+  const item = (c) =>
+    `<a href="#" class="side-item face" data-view='${esc(JSON.stringify({ type: "cluster", id: c.id }))}' title="${esc(c.name || t("faces.unnamedTip", { id: c.id }))}">
       <img class="face-thumb" loading="lazy" src="/api/faces/${c.cover}/thumb" alt="">
       <span class="text-truncate ${c.name ? "" : "fst-italic text-body-secondary"}">${esc(clusterLabel(c))}</span>
-      <span class="count">${c.photos}</span></a>`).join("");
+      <span class="count">${c.photos}</span></a>`;
+  const named = state.clusters.filter((c) => c.name), unnamed = state.clusters.filter((c) => !c.name);
+  $("#panel-faces").innerHTML = toggle
+    + (named.length ? `<div class="side-heading faces-sub">${esc(t("faces.people"))}</div>` + named.map(item).join("") : "")
+    + (unnamed.length ? `<div class="side-heading faces-sub">${esc(t("faces.unidentified"))} (${unnamed.length})</div>` + unnamed.map(item).join("") : "");
   $("#facesAll").onchange = (e) => { state.facesAll = e.target.checked; loadSidebar(); };
 }
 
@@ -313,6 +346,8 @@ $$("#sideTabs .nav-link").forEach((b) => b.addEventListener("click", () => {
 }));
 
 /* ------------------------------------------------------------------ vue principale */
+const sortable = (v) => !["album", "semantic", "similar"].includes(v.type);
+
 function viewParams() {
   const v = state.view, p = new URLSearchParams();
   if (v.type === "folder") { p.set("root", v.root); p.set("folder", v.folder); if ($("#subfolders").checked) p.set("recursive", "true"); }
@@ -324,6 +359,7 @@ function viewParams() {
   if (v.type === "semantic") p.set("semantic", v.q);
   if (v.type === "similar") p.set("similar", v.id);
   if (v.type === "cluster") p.set("cluster", v.id);
+  if (sortable(v) && $("#viewSort").value) p.set("sort", $("#viewSort").value);
   return p;
 }
 
@@ -340,13 +376,15 @@ function updateTitle() {
   if (v.type === "similar") title = t("view.similar", { name: v.name });
   if (v.type === "cluster") {
     const c = state.clusters.find((x) => x.id === v.id);
-    title = c ? clusterLabel(c) : "";
+    title = c ? clusterLabel(c) : t("faces.unnamed");
     if ($("#clusterForm").dataset.for !== String(v.id)) {
       $("#clusterName").value = c?.name || "";
       $("#clusterForm").dataset.for = String(v.id);
     }
   }
   $("#clusterForm").classList.toggle("d-none", v.type !== "cluster");
+  $("#clusterMode").classList.toggle("d-none", v.type !== "cluster");
+  $("#viewSort").classList.toggle("d-none", !sortable(v) || (v.type === "cluster" && faceGrid.mode === "faces"));
   $("#viewTitle").textContent = title;
   $("#viewCount").textContent = t("view.count", { n: state.total });
   $("#subfoldersWrap").classList.toggle("d-none", v.type !== "folder");
@@ -360,6 +398,7 @@ function updateTitle() {
 const grid = { cols: 1, size: 170, gap: 6, pad: 10, tiles: new Map(), pages: new Set(), loading: new Set(), gen: 0 };
 
 function setView(view, { keepScroll = false } = {}) {
+  if (view.type !== "cluster" || view.id !== state.view.id) faceGrid.leave();
   state.view = view;
   state.items = [];
   state.total = 0;
@@ -372,6 +411,7 @@ function setView(view, { keepScroll = false } = {}) {
   if (!keepScroll) $(".content").scrollTop = 0;
   markActive(); updateTitle();
   loadPage(0);
+  faceGrid.enterView();
 }
 
 async function loadPage(page) {
@@ -496,11 +536,14 @@ function makeTile(it, idx) {
     if (isSelected(it.id)) div.classList.add("selected");
     const badges = [it.star ? `<i class="bi bi-star-fill star"></i>` : "",
       it.ops_source === "user" ? `<i class="bi bi-magic" title="${esc(t("viewer.source.user"))}"></i>` : "",
-      it.ops_source === "picasa" ? `<i class="bi bi-p-square" title="${esc(t("viewer.source.picasa"))}"></i>` : ""].join("");
+      it.ops_source === "picasa" ? `<i class="pmark" title="${esc(t("viewer.source.picasa"))}">${PICASA_PIE}</i>` : ""].join("");
     const vbadge = it.media === "video" ? `<span class="vbadge" title="${esc(t("view.video"))}"><i class="bi bi-film"></i>${fmtDuration(it.duration)}</span>` : "";
     div.innerHTML = `<img decoding="async" src="/api/photos/${it.id}/thumb?v=${it.ops_hash}" alt="">
       ${vbadge}<div class="badges">${badges}</div>
-      <div class="name"><div class="fname">${esc(it.filename)}</div>${it.caption ? `<div class="caption">${esc(it.caption)}</div>` : ""}</div>`;
+      <div class="name" title="${esc(it.filename)}"><div class="fname">${esc(tileDate(it) || it.filename)}</div>${it.caption ? `<div class="caption">${esc(it.caption)}</div>` : ""}</div>`;
+    const img = div.querySelector("img");
+    if (img.complete && img.naturalWidth) placeBadges(div, img);
+    else img.addEventListener("load", () => placeBadges(div, img), { once: true });
   } else {
     div.classList.add("placeholder");
   }
@@ -693,6 +736,7 @@ const viewer = {
   async load(idx) {
     if (idx < 0 || idx >= state.total) return;
     zoom.exit(false);
+    faceUI.closeMenu();
     const item = await ensureIndex(idx);
     if (!item) return;
     if (!this.photo || this.photo.id !== item.id) { this.blank(); this.stopVideo(); }
@@ -712,6 +756,7 @@ const viewer = {
   // qu'elle est prête. Pour les retouches d'une même photo, l'image reste en place (pas de flick).
   blank() {
     $("#vImg").classList.add("switching");
+    $("#vFaces").classList.add("d-none");
     $("#vName").textContent = "";
     $("#vMeta").textContent = "";
   },
@@ -735,6 +780,29 @@ const viewer = {
     try {
       if (!this.dirty()) {
         src = `/api/photos/${this.photo.id}/preview?v=${this.photo.ops_hash}`;
+        // Nouvelle photo : sa miniature (déjà en cache) s'affiche aussitôt, l'aperçu net la remplace.
+        if (img.classList.contains("switching")) {
+          const thumb = `/api/photos/${this.photo.id}/thumb?v=${this.photo.ops_hash}`;
+          const t0 = new Image();
+          t0.src = thumb;
+          if (t0.complete || await Promise.race([t0.decode().then(() => true, () => false),
+                                                  new Promise((r) => setTimeout(() => r(false), 120))])) {
+            if (token === this.renderToken && img.classList.contains("switching")) {
+              // affichée à la taille qu'aura l'aperçu, pour qu'il n'y ait pas de saut
+              const ratio = (t0.naturalWidth || 4) / (t0.naturalHeight || 3);
+              const stage = $(".viewer-stage").getBoundingClientRect();
+              const ss = $(".viewer").classList.contains("slideshow") || $(".viewer").classList.contains("fullview");
+              const maxW = stage.width - (ss ? 0 : 120), maxH = window.innerHeight - (ss ? 0 : 40);
+              const pw = ratio >= 1 ? 1600 : 1600 * ratio, ph = ratio >= 1 ? 1600 / ratio : 1600;
+              const k = Math.min(1, maxW / pw, maxH / ph);
+              img.style.width = `${Math.round(pw * k)}px`;
+              img.style.height = `${Math.round(ph * k)}px`;
+              img.src = thumb;
+              img.classList.remove("switching");
+              img.classList.add("placeholder");
+            }
+          }
+        }
       } else {
         const blob = await api(`/api/photos/${this.photo.id}/render`, { json: { ops: this.draft, size: 1600 } });
         src = blobUrl = URL.createObjectURL(blob);
@@ -752,7 +820,8 @@ const viewer = {
     // Échange instantané : nouvelle image et suppression de la rotation CSS dans la même image affichée
     img.style.transition = "none";
     img.src = src;
-    img.classList.remove("switching");
+    img.classList.remove("switching", "placeholder");
+    img.style.width = img.style.height = "";
     img.style.transform = "";
     this.renderedStraighten = targetStraighten;
     void img.offsetWidth;
@@ -761,6 +830,8 @@ const viewer = {
     this.objectUrl = blobUrl;
     $("#vLoading").classList.add("d-none");
     this.prefetch();
+    faceUI.render();
+    if (this.cropping) requestAnimationFrame(() => this.positionCrop());
   },
 
   /* ---- vidéos : lecture directe (MP4) ou copie convertie par le serveur (vieux AVI...) ---- */
@@ -814,7 +885,7 @@ const viewer = {
   prefetch() {
     for (const d of [1, -1, 2]) {
       const it = state.items[this.idx + d];
-      if (it && it.media !== "video") new Image().src = `/api/photos/${it.id}/preview?v=${it.ops_hash}`;
+      if (it && it.media !== "video") new Image().src = `/api/photos/${it.id}/preview?v=${it.ops_hash}&prefetch=1`;
     }
     if (this.idx + 3 < state.total && !state.items[this.idx + 3]) ensureIndex(this.idx + 3);
   },
@@ -994,8 +1065,10 @@ const viewer = {
     const img = $("#vImg");
     if (!on) {
       if (this.beforeShown) { img.src = this.afterSrc; this.beforeShown = false; }
+      faceUI.render();
       return;
     }
+    $("#vFaces").classList.add("d-none");
     if (this.beforeShown || !this.photo) return;
     if (this.originalFor !== this.photo.id) {
       const blob = await api(`/api/photos/${this.photo.id}/render`, { json: { ops: [], size: 1600 } });
@@ -1015,11 +1088,43 @@ const viewer = {
     this.renderImage();
   },
 
-  startCrop() {
+  // Recadrage : un cadre redimensionnable apparaît tout de suite sur la photo. S'il existe déjà
+  // un recadrage (en fin de retouches géométriques), on le retire pour montrer toute la photo et on
+  // repart de ce cadre : on l'ajuste au lieu de recadrer un recadrage.
+  async startCrop() {
+    if (this.cropping || this.isVideo) return;
+    this.cropBackup = clone(this.draft);
+    const geo = ["rotate90", "straighten", "crop", "perspective"];
+    let init = { l: 0, t: 0, r: 1, b: 1 };
+    for (let i = this.draft.length - 1; i >= 0; i--) {
+      if (!geo.includes(this.draft[i].op)) continue;
+      if (this.draft[i].op === "crop") {
+        const c = this.draft[i];
+        init = { l: Math.min(c.l, c.r), t: Math.min(c.t, c.b), r: Math.max(c.l, c.r), b: Math.max(c.t, c.b) };
+        this.draft.splice(i, 1);
+        await this.renderImage();
+      }
+      break;
+    }
     this.cropping = true;
-    this.cropRect = null;
+    this.cropRect = init;
+    this.cropRatio = null;
+    $$("#eCropRatios [data-ratio]").forEach((b) => b.classList.toggle("active", b.dataset.ratio === "free"));
     $("#vWrap").classList.add("cropping");
     $("#vImg").style.transform = "";
+    $("#vCrop").classList.remove("d-none");
+    $("#eCropBar").classList.remove("d-none");
+    $("#eCrop").classList.add("active");
+    faceUI.render();
+    this.positionCrop();
+  },
+
+  positionCrop() {
+    if (!this.cropping || !this.cropRect) return;
+    const img = $("#vImg"), c = this.cropRect;
+    Object.assign($("#vCrop").style, {
+      left: `${img.offsetLeft + c.l * img.clientWidth}px`, top: `${img.offsetTop + c.t * img.clientHeight}px`,
+      width: `${(c.r - c.l) * img.clientWidth}px`, height: `${(c.b - c.t) * img.clientHeight}px` });
   },
 
   stopCrop() {
@@ -1027,18 +1132,45 @@ const viewer = {
     this.cropRect = null;
     $("#vWrap").classList.remove("cropping");
     $("#vCrop").classList.add("d-none");
-    $("#eCropApply").classList.add("d-none");
+    $("#eCropBar").classList.add("d-none");
+    $("#eCrop").classList.remove("active");
+  },
+
+  cancelCrop() {
+    if (!this.cropping) return;
+    const changed = JSON.stringify(this.cropBackup) !== JSON.stringify(this.draft);
+    this.draft = this.cropBackup;
+    this.stopCrop();
+    if (changed) this.renderImage(); else faceUI.render();
   },
 
   applyCrop() {
-    if (!this.cropRect) return;
+    if (!this.cropping || !this.cropRect) return;
     const c = this.cropRect, r4 = (v) => Math.round(v * 10000) / 10000;
-    this.draft.push({ op: "crop", l: r4(c.l), t: r4(c.t), r: r4(c.r), b: r4(c.b) });
+    const full = c.l < 0.002 && c.t < 0.002 && c.r > 0.998 && c.b > 0.998;
+    if (!full) this.draft.push({ op: "crop", l: r4(c.l), t: r4(c.t), r: r4(c.r), b: r4(c.b) });
     this.stopCrop();
     this.renderImage();
   },
 
-  async save(ops) {
+  // Format imposé : rapport largeur / hauteur en pixels (null = libre)
+  setCropRatio(key) {
+    const img = $("#vImg");
+    const ratio = key === "free" ? null : key === "orig" ? img.naturalWidth / img.naturalHeight : +key;
+    this.cropRatio = ratio && this.cropPortrait && key !== "orig" ? 1 / ratio : ratio;
+    $$("#eCropRatios [data-ratio]").forEach((b) => b.classList.toggle("active", b.dataset.ratio === key));
+    this.cropRatioKey = key;
+    if (!this.cropRatio || !this.cropRect) return;
+    const rn = this.cropRatio * img.clientHeight / img.clientWidth;   // rapport en coordonnées relatives
+    const c = this.cropRect, cx = (c.l + c.r) / 2, cy = (c.t + c.b) / 2;
+    let w = c.r - c.l, h = c.b - c.t;
+    if (w / h > rn) w = h * rn; else h = w / rn;
+    let l = Math.max(0, Math.min(1 - w, cx - w / 2)), t = Math.max(0, Math.min(1 - h, cy - h / 2));
+    this.cropRect = { l, t, r: l + w, b: t + h };
+    this.positionCrop();
+  },
+
+    async save(ops) {
     this.photo = await api(`/api/photos/${this.photo.id}/ops`, { method: "PUT", json: { ops } });
     this.draft = clone(this.photo.ops);
     const item = state.items[this.idx];
@@ -1072,7 +1204,7 @@ document.addEventListener("keyup", (e) => { if (e.key.toLowerCase() === "o") vie
 $("#eStrength").addEventListener("input", (e) => { $("#eStrengthVal").textContent = `${e.target.value} %`; });
 $("#eStrength").addEventListener("change", (e) => viewer.setStrength(+e.target.value));
 $("#ePerspRemove").onclick = () => { viewer.setOp("perspective", null); viewer.perspEstimate = null; viewer.renderImage(); };
-$("#eCrop").onclick = () => viewer.startCrop();
+$("#eCrop").onclick = () => (viewer.cropping ? viewer.applyCrop() : viewer.startCrop());
 $("#eCropApply").onclick = () => viewer.applyCrop();
 $("#eCropRemove").onclick = () => { viewer.draft = viewer.draft.filter((o) => o.op !== "crop"); viewer.renderImage(); };
 $("#eSave").onclick = () => viewer.save(viewer.draft);
@@ -1124,36 +1256,102 @@ $("#vTags").addEventListener("click", async (e) => {
   loadSidebar();
 });
 
-// Outil de recadrage : tracer un rectangle sur l'aperçu
+// Outil de recadrage : poignées (coins et côtés), déplacement du cadre, ou nouveau cadre tracé
+// hors du cadre actuel. Le format choisi (1:1, 4:3…) est respecté pendant le redimensionnement.
 (() => {
-  const wrap = $("#vWrap"), box = $("#vCrop");
-  let start = null;
-  const rel = (e) => {
-    const r = $("#vImg").getBoundingClientRect();
-    return { x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)), r };
-  };
+  const wrap = $("#vWrap"), MIN = 0.03;
+  let drag = null;
+  const pos = (e, r) => ({ x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height });
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+  // Cadre de format rn (coordonnées relatives) ancré en (ax, ay), qui s'étend vers sx, sy
+  // (+1, −1, ou 0 = centré), réduit au besoin pour rester dans la photo.
+  function anchored(ax, ay, sx, sy, w, h, rn) {
+    const maxW = sx > 0 ? 1 - ax : sx < 0 ? ax : 2 * Math.min(ax, 1 - ax);
+    const maxH = sy > 0 ? 1 - ay : sy < 0 ? ay : 2 * Math.min(ay, 1 - ay);
+    if (rn) {
+      w = Math.min(w, maxW, maxH * rn);
+      h = w / rn;
+    } else {
+      w = Math.min(w, maxW); h = Math.min(h, maxH);
+    }
+    w = Math.max(w, MIN); h = Math.max(h, MIN);
+    const l = sx > 0 ? ax : sx < 0 ? ax - w : ax - w / 2, t = sy > 0 ? ay : sy < 0 ? ay - h : ay - h / 2;
+    return { l: clamp(l, 0, 1 - w), t: clamp(t, 0, 1 - h), r: clamp(l, 0, 1 - w) + w, b: clamp(t, 0, 1 - h) + h };
+  }
+
+  function resize(mode, s, p, rn) {
+    const cx = (s.l + s.r) / 2, cy = (s.t + s.b) / 2;
+    const spec = {
+      se: [s.l, s.t, 1, 1], nw: [s.r, s.b, -1, -1], ne: [s.l, s.b, 1, -1], sw: [s.r, s.t, -1, 1],
+      e: [s.l, cy, 1, 0], w: [s.r, cy, -1, 0], s: [cx, s.t, 0, 1], n: [cx, s.b, 0, -1],
+    }[mode];
+    const [ax, ay, sx, sy] = spec;
+    let w = sx ? Math.abs(p.x - ax) : s.r - s.l, h = sy ? Math.abs(p.y - ay) : s.b - s.t;
+    if (rn) {
+      if (sx && sy) { if (w / h > rn) h = w / rn; else w = h * rn; }   // coin : suit le plus grand mouvement
+      else if (sx) h = w / rn;
+      else w = h * rn;
+    }
+    if (!rn && !sx) return { ...s, t: sy < 0 ? clamp(p.y, 0, s.b - MIN) : s.t, b: sy > 0 ? clamp(p.y, s.t + MIN, 1) : s.b };
+    if (!rn && !sy) return { ...s, l: sx < 0 ? clamp(p.x, 0, s.r - MIN) : s.l, r: sx > 0 ? clamp(p.x, s.l + MIN, 1) : s.r };
+    return anchored(ax, ay, sx, sy, w, h, rn);
+  }
+
   wrap.addEventListener("pointerdown", (e) => {
-    if (!viewer.cropping || e.target.closest("#ssBar, #vFull")) return;
-    start = rel(e);
+    if (!viewer.cropping || e.button !== 0 || e.target.closest("#ssBar, #vFull, #vFacesBtn")) return;
+    const r = $("#vImg").getBoundingClientRect();
+    const handle = e.target.closest(".crop-h"), inBox = e.target.closest("#vCrop");
+    const p = pos(e, r);
+    drag = { r, start: { ...viewer.cropRect }, p0: p,
+             mode: handle ? handle.dataset.h : inBox ? "move" : "new",
+             rn: viewer.cropRatio ? viewer.cropRatio * r.height / r.width : null };
+    if (drag.mode === "new") drag.start = { l: clamp(p.x, 0, 1), t: clamp(p.y, 0, 1), r: clamp(p.x, 0, 1), b: clamp(p.y, 0, 1) };
     wrap.setPointerCapture(e.pointerId);
+    e.preventDefault();
   });
   wrap.addEventListener("pointermove", (e) => {
-    if (!viewer.cropping || !start) return;
-    const cur = rel(e), r = cur.r, wr = wrap.getBoundingClientRect();
-    const l = Math.min(start.x, cur.x), tt = Math.min(start.y, cur.y);
-    const rr = Math.max(start.x, cur.x), b = Math.max(start.y, cur.y);
-    Object.assign(box.style, { left: `${r.left - wr.left + l * r.width}px`, top: `${r.top - wr.top + tt * r.height}px`,
-      width: `${(rr - l) * r.width}px`, height: `${(b - tt) * r.height}px` });
-    box.classList.remove("d-none");
-    viewer.cropRect = { l, t: tt, r: rr, b };
+    if (!viewer.cropping || !drag) return;
+    const p = pos(e, drag.r), s = drag.start;
+    if (drag.mode === "move") {
+      const w = s.r - s.l, h = s.b - s.t;
+      const l = clamp(s.l + p.x - drag.p0.x, 0, 1 - w), t = clamp(s.t + p.y - drag.p0.y, 0, 1 - h);
+      viewer.cropRect = { l, t, r: l + w, b: t + h };
+    } else if (drag.mode === "new") {
+      const ax = s.l, ay = s.t, sx = p.x >= ax ? 1 : -1, sy = p.y >= ay ? 1 : -1;
+      let w = Math.abs(p.x - ax), h = Math.abs(p.y - ay);
+      if (drag.rn) { if (w / Math.max(h, 1e-6) > drag.rn) h = w / drag.rn; else w = h * drag.rn; }
+      viewer.cropRect = anchored(ax, ay, sx, sy, w, h, drag.rn);
+    } else {
+      viewer.cropRect = resize(drag.mode, s, { x: clamp(p.x, 0, 1), y: clamp(p.y, 0, 1) }, drag.rn);
+    }
+    viewer.positionCrop();
   });
-  wrap.addEventListener("pointerup", () => {
-    if (!viewer.cropping || !start) return;
-    start = null;
-    const c = viewer.cropRect;
-    $("#eCropApply").classList.toggle("d-none", !(c && c.r - c.l > 0.02 && c.b - c.t > 0.02));
-  });
+  const end = () => { drag = null; };
+  wrap.addEventListener("pointerup", end);
+  wrap.addEventListener("pointercancel", end);
+  wrap.addEventListener("dblclick", (e) => { if (viewer.cropping && e.target.closest("#vCrop")) viewer.applyCrop(); });
 })();
+
+$("#eCropRatios").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-ratio]");
+  if (b) viewer.setCropRatio(b.dataset.ratio);
+});
+$("#eCropFlip").onclick = () => {
+  viewer.cropPortrait = !viewer.cropPortrait;
+  $("#eCropFlip i").className = `bi ${viewer.cropPortrait ? "bi-phone" : "bi-phone-landscape"}`;
+  if (viewer.cropRatioKey && !["free", "orig"].includes(viewer.cropRatioKey)) viewer.setCropRatio(viewer.cropRatioKey);
+};
+$("#eCropReset").onclick = () => { viewer.cropRect = { l: 0, t: 0, r: 1, b: 1 }; viewer.setCropRatio(viewer.cropRatioKey || "free"); viewer.positionCrop(); };
+$("#eCropCancel").onclick = () => viewer.cancelCrop();
+document.addEventListener("keydown", (e) => {
+  if (!viewer.cropping || !$("#viewer").classList.contains("show")) return;
+  if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) return;
+  if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); viewer.applyCrop(); }
+  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); viewer.cancelCrop(); }
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") e.stopImmediatePropagation();   // pas de photo suivante en plein recadrage
+}, true);
+window.addEventListener("resize", () => viewer.positionCrop());
 
 document.addEventListener("keydown", (e) => {
   if (!$("#viewer").classList.contains("show") || ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) return;
@@ -1369,7 +1567,7 @@ const zoom = {
 (() => {
   const wrap = $("#vWrap");
   const ignore = (e) => e.button !== 0 || viewer.cropping || slideshow.active || viewer.isVideo
-    || e.target.closest("#ssBar, #vFull");
+    || e.target.closest("#ssBar, #vFull, #vFacesBtn, #vFaces .face-box, #faceMenu");
   wrap.addEventListener("pointerdown", (e) => {
     if (ignore(e)) return;
     e.preventDefault();
@@ -1430,7 +1628,7 @@ document.addEventListener("keydown", (e) => {
 }, true);
 // Double-clic sur la photo : plein écran (écouteur sur le cadre, qui capture le pointeur)
 $("#vWrap").addEventListener("dblclick", (e) => {
-  if (e.target.closest("#ssBar, #vFull")) return;
+  if (e.target.closest("#ssBar, #vFull, #vFacesBtn, #vFaces .face-box, #faceMenu")) return;
   if (viewer.cropping || zoom.active || zoom.justExited()) return;
   setFullview(!$(".viewer").classList.contains("fullview"));
 });
@@ -1530,6 +1728,7 @@ async function openSettings() {
   $("#sCacheMax").value = s.cache_max_gb;
   refreshCacheUsage();
   $("#sEnhanceStrength").value = Math.round(s.enhance_strength * 100);
+  $("#sEnhanceState").textContent = "";
   $("#sExcluded").innerHTML = s.excluded_folders.length ? s.excluded_folders.map((f) =>
     `<li class="list-group-item d-flex justify-content-between align-items-center small">
       <span class="text-truncate"><i class="bi bi-eye-slash me-2"></i>${esc(f)}</span>
@@ -1601,6 +1800,34 @@ $("#sRootAdd").onclick = async () => {
   await openSettings();
   startScan();
 };
+/* ---- intensité d'amélioration, appliquée aussi aux photos déjà améliorées ---- */
+$("#sEnhanceApply").onclick = async () => {
+  const pct = Math.max(0, Math.min(150, Math.round(+$("#sEnhanceStrength").value || 0)));
+  const info = await api("/api/enhance/strength");
+  if (!info.photos) {
+    await api("/api/settings", { method: "PUT", json: { enhance_strength: pct / 100 } });
+    $("#sEnhanceState").textContent = t("settings.enhanceNone");
+    return;
+  }
+  const ok = await dialog({ title: t("settings.enhanceApplyTitle"),
+    body: esc(t("settings.enhanceApplyConfirm", { n: info.photos, from: Math.round(info.strength * 100), to: pct })),
+    ok: t("settings.enhanceApplyOk") });
+  if (!ok) return;
+  await api("/api/enhance/strength", { json: { strength: pct / 100 } });
+  const poll = async () => {
+    const st = await api("/api/enhance/strength");
+    if (st.running) {
+      $("#sEnhanceState").textContent = t("settings.enhanceProgress", { done: st.done, total: st.total || info.photos });
+      setTimeout(poll, 700);
+      return;
+    }
+    $("#sEnhanceState").textContent = st.error ? `${t("wp.err.other")} ${st.error}` : t("settings.enhanceDone", { n: st.result?.photos ?? 0, to: pct });
+    state.settings.enhance_strength = pct / 100;
+    setView(state.view, { keepScroll: true });
+  };
+  poll();
+};
+
 /* ---- WordPress ---- */
 const wpSettings = () => ({
   wordpress_url: $("#sWpUrl").value.trim(), wordpress_user: $("#sWpUser").value.trim(),
@@ -1781,3 +2008,359 @@ $$(".lang-btn").forEach((b) => b.onclick = () => {
   pollAI();
   if (!status.settings.roots.length) openSettings();
 })();
+
+
+/* ================================================================== visages
+   Cadres sur la photo (visionneuse), correction d'un visage (nommer, retirer d'une personne,
+   « pas un visage »), vue des visages d'une personne avec sélection, suggestions de regroupement. */
+
+// Position d'un rectangle de la photo d'origine dans l'image retouchée (même calcul que le serveur).
+function mapBox(box, ops, w, h) {
+  let pts = [[box[0] * w, box[1] * h], [box[2] * w, box[1] * h], [box[2] * w, box[3] * h], [box[0] * w, box[3] * h]];
+  for (const op of ops || []) {
+    if (op.op === "rotate90") {
+      const n = ((op.n ?? 1) % 4 + 4) % 4;
+      for (let i = 0; i < n; i++) { pts = pts.map(([x, y]) => [h - y, x]); [w, h] = [h, w]; }
+    } else if (op.op === "straighten") {
+      const deg = +op.deg || 0;
+      if (Math.abs(deg) < 1e-3) continue;
+      const th = deg * Math.PI / 180, c = Math.cos(th), s = Math.sin(th), cx = w / 2, cy = h / 2;
+      pts = pts.map(([x, y]) => [cx + (x - cx) * c - (y - cy) * s, cy + (x - cx) * s + (y - cy) * c]);
+      const a = Math.abs(th), k = Math.cos(a) + Math.sin(a) * Math.max(w, h) / Math.min(w, h);
+      const cw = w / k, ch = h / k, left = (w - cw) / 2, top = (h - ch) / 2;
+      pts = pts.map(([x, y]) => [x - left, y - top]);
+      w = cw; h = ch;
+    } else if (op.op === "crop") {
+      const cl = (v) => Math.max(0, Math.min(1, v));
+      const [l, r] = [cl(op.l), cl(op.r)].sort((a, b) => a - b), [t0, b] = [cl(op.t), cl(op.b)].sort((a, b) => a - b);
+      if (r - l < 0.01 || b - t0 < 0.01) continue;
+      pts = pts.map(([x, y]) => [x - l * w, y - t0 * h]);
+      w *= r - l; h *= b - t0;
+    } else if (op.op === "perspective") {
+      return null;
+    }
+  }
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  return [Math.min(...xs) / w, Math.min(...ys) / h, Math.max(...xs) / w, Math.max(...ys) / h];
+}
+
+const faceUI = {
+  on: (() => { try { return localStorage.getItem("faceBoxes") === "1"; } catch (_) { return false; } })(),
+  names: [],
+  menuFace: null,
+
+  visible(p) { return (p?.faces || []).filter((f) => !f.ignored && !f.duplicate); },
+  label(f) { return f.person || t("faces.unknownFace"); },
+
+  async loadNames() {
+    try { this.names = await api("/api/faces/names"); } catch (_) { this.names = []; }
+    $("#faceNames").innerHTML = this.names.map((n) => `<option value="${esc(n)}">`).join("");
+  },
+
+  setOn(on) {
+    this.on = on;
+    try { localStorage.setItem("faceBoxes", on ? "1" : "0"); } catch (_) { /* stockage indisponible */ }
+    if (!on) this.closeMenu();
+    this.render();
+    this.panel();
+  },
+
+  // Cadres sur l'image affichée
+  render() {
+    const layer = $("#vFaces"), p = viewer.photo, img = $("#vImg");
+    const faces = this.visible(p);
+    $("#vFacesBtn").classList.toggle("d-none", !p || viewer.isVideo || !faces.length);
+    $("#vFacesBtn").classList.toggle("active", this.on);
+    layer.innerHTML = "";
+    if (!p || viewer.isVideo || !this.on || viewer.cropping || viewer.beforeShown || !faces.length || img.classList.contains("switching")) {
+      layer.classList.add("d-none");
+      return;
+    }
+    Object.assign(layer.style, { left: `${img.offsetLeft}px`, top: `${img.offsetTop}px`, width: `${img.clientWidth}px`, height: `${img.clientHeight}px` });
+    const ops = viewer.draft || p.ops;
+    for (const f of faces) {
+      const b = mapBox([f.l, f.t, f.r, f.b], ops, p.width || 1, p.height || 1);
+      if (!b) continue;
+      const l = Math.max(0, b[0]), tt = Math.max(0, b[1]), r = Math.min(1, b[2]), bb = Math.min(1, b[3]);
+      if (r - l <= 0.005 || bb - tt <= 0.005) continue;     // visage coupé par le recadrage
+      const el = document.createElement("div");
+      el.className = `face-box ${f.person ? "" : "unknown"} ${f.source === "picasa" ? "picasa" : ""} ${this.menuFace === f.id ? "active" : ""}`;
+      Object.assign(el.style, { left: `${l * 100}%`, top: `${tt * 100}%`, width: `${(r - l) * 100}%`, height: `${(bb - tt) * 100}%` });
+      el.dataset.face = f.id;
+      el.innerHTML = `<span class="face-label">${esc(this.label(f))}</span>`;
+      layer.appendChild(el);
+    }
+    layer.classList.remove("d-none");
+  },
+
+  // Liste des personnes dans le panneau de droite
+  panel() {
+    const p = viewer.photo, faces = this.visible(p).filter((f) => f.source === "ai" || !this.visible(p).some((x) => x.source === "ai"));
+    $("#vFacesSection").classList.toggle("d-none", !p || viewer.isVideo || !faces.length);
+    if (!p || !faces.length) return;
+    $("#vFacesShow").textContent = t(this.on ? "faces.hideBoxes" : "faces.showBoxes");
+    $("#vFacesList").innerHTML = faces.map((f) => f.source === "ai"
+      ? `<span class="face-chip ${f.person ? "" : "unknown"}" data-face-chip="${f.id}"><img src="/api/faces/${f.id}/thumb" alt="">${esc(this.label(f))}</span>`
+      : `<span class="face-chip" title="Picasa"><i class="bi bi-person-circle ms-1"></i>${esc(this.label(f))}</span>`).join("");
+  },
+
+  closeMenu() {
+    this.menuFace = null;
+    $("#faceMenu").classList.add("d-none");
+    $$("#vFaces .face-box.active").forEach((el) => el.classList.remove("active"));
+  },
+
+  async openMenu(faceId) {
+    const p = viewer.photo, f = p?.faces.find((x) => x.id === faceId);
+    if (!f || f.source !== "ai") return;
+    if (!this.on) this.setOn(true);
+    if (!this.names.length) await this.loadNames();
+    this.menuFace = faceId;
+    this.render();
+    const menu = $("#faceMenu"), box = $(`#vFaces .face-box[data-face="${faceId}"]`);
+    menu.innerHTML = `
+      <div class="fm-head"><img src="/api/faces/${f.id}/thumb" alt="">
+        <div class="fw-semibold text-truncate">${esc(this.label(f))}</div>
+        <button type="button" class="btn-close ms-auto" data-fm="close"></button></div>
+      <form class="d-flex gap-1 mb-2" data-fm-form>
+        <input class="form-control form-control-sm" list="faceNames" placeholder="${esc(t("faces.namePlaceholder"))}" value="${esc(f.person || "")}">
+        <button class="btn btn-sm btn-primary" type="submit">${esc(t(f.person ? "faces.rename" : "faces.assign"))}</button></form>
+      <div class="list-group list-group-flush">
+        ${f.cluster_id > 0 ? `<button type="button" class="list-group-item list-group-item-action" data-fm="photos"><i class="bi bi-images me-1"></i>${esc(t(f.person ? "faces.seePhotos" : "faces.seeGroup"))}</button>` : ""}
+        ${f.cluster_id > 0 || f.person ? `<button type="button" class="list-group-item list-group-item-action" data-fm="unassign"><i class="bi bi-person-dash me-1"></i>${esc(t("faces.notThisPerson"))}</button>` : ""}
+        <button type="button" class="list-group-item list-group-item-action text-danger" data-fm="ignore"><i class="bi bi-x-octagon me-1"></i>${esc(t("faces.notAFace"))}</button>
+      </div>`;
+    menu.classList.remove("d-none");
+    // à côté du cadre, sans sortir de l'image
+    const wrap = $("#vWrap").getBoundingClientRect();
+    const r = box ? box.getBoundingClientRect() : wrap;
+    let x = r.right - wrap.left + 10, y = r.top - wrap.top;
+    if (x + menu.offsetWidth > wrap.width) x = Math.max(0, r.left - wrap.left - menu.offsetWidth - 10);
+    y = Math.max(0, Math.min(y, wrap.height - menu.offsetHeight));
+    Object.assign(menu.style, { left: `${x}px`, top: `${y}px` });
+    const input = menu.querySelector("input");
+    menu.querySelector("[data-fm-form]").onsubmit = (e) => {
+      e.preventDefault();
+      const name = input.value.trim();
+      if (name) this.act([faceId], "assign", name);
+    };
+    menu.onclick = (e) => {
+      const b = e.target.closest("[data-fm]");
+      if (!b) return;
+      if (b.dataset.fm === "close") this.closeMenu();
+      if (b.dataset.fm === "unassign") this.act([faceId], "unassign");
+      if (b.dataset.fm === "ignore") this.act([faceId], "ignore");
+      if (b.dataset.fm === "photos") { viewer.modal.hide(); setView({ type: "cluster", id: f.cluster_id }); }
+    };
+    input.focus();
+    input.select();
+  },
+
+  async act(ids, action, name = null, cluster = null) {
+    await api("/api/faces/update", { json: { face_ids: ids, action, name, cluster } });
+    toast(t(`faces.done.${action}`, { name: name || "" }));
+    this.closeMenu();
+    if (viewer.photo) {
+      const fresh = await api(`/api/photos/${viewer.photo.id}`);
+      viewer.photo.faces = fresh.faces;
+      viewer.photo.tags = fresh.tags;
+      viewer.renderPanel();
+      this.render();
+    }
+    if (name) this.loadNames();
+    loadSidebar();
+  },
+};
+
+// panneau : la liste des visages suit le rendu du panneau
+{
+  const orig = viewer.renderPanel.bind(viewer);
+  viewer.renderPanel = (...a) => { const r = orig(...a); faceUI.panel(); return r; };
+}
+for (const k of ["enter", "exit"]) {
+  const orig = zoom[k].bind(zoom);
+  zoom[k] = (...a) => { const r = orig(...a); faceUI.closeMenu(); return r; };
+}
+$("#vFacesBtn").onclick = (e) => { e.stopPropagation(); faceUI.setOn(!faceUI.on); };
+$("#vFacesShow").onclick = () => faceUI.setOn(!faceUI.on);
+$("#vFaces").addEventListener("pointerdown", (e) => { if (e.target.closest(".face-box")) e.stopPropagation(); });
+$("#vFaces").addEventListener("click", (e) => {
+  const b = e.target.closest(".face-box");
+  if (b) { e.stopPropagation(); faceUI.openMenu(+b.dataset.face); }
+});
+$("#faceMenu").addEventListener("pointerdown", (e) => e.stopPropagation());
+$("#vFacesList").addEventListener("click", (e) => {
+  const c = e.target.closest("[data-face-chip]");
+  if (c) faceUI.openMenu(+c.dataset.faceChip);
+});
+document.addEventListener("keydown", (e) => {
+  if (!$("#viewer").classList.contains("show") || ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) return;
+  if (e.key.toLowerCase() === "f" && !e.ctrlKey && !e.metaKey && !viewer.isVideo) faceUI.setOn(!faceUI.on);
+  if (e.key === "Escape" && faceUI.menuFace) { e.stopPropagation(); faceUI.closeMenu(); }
+}, true);
+window.addEventListener("resize", () => faceUI.render());
+$("#viewer").addEventListener("hidden.bs.modal", () => faceUI.closeMenu());
+
+/* ---- vue « Visages » d'une personne ---- */
+const faceGrid = {
+  mode: "photos", items: [], total: 0, selected: new Set(), last: null, cid: null,
+
+  cluster() { return state.clusters.find((c) => c.id === state.view.id); },
+
+  enterView() {
+    if (state.view.type !== "cluster") return;
+    this.cid = state.view.id;
+    this.suggestions();
+    this.setMode(this.mode);
+  },
+
+  leave() {
+    this.items = []; this.selected.clear(); this.cid = null;
+    $("#faceGridWrap").classList.add("d-none");
+    $("#faceSuggest").classList.add("d-none");
+    $("#grid").classList.remove("d-none");
+  },
+
+  setMode(mode) {
+    this.mode = mode;
+    $$("#clusterMode [data-mode]").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
+    const faces = mode === "faces" && state.view.type === "cluster";
+    $("#faceGridWrap").classList.toggle("d-none", !faces);
+    $("#viewSort").classList.toggle("d-none", faces);
+    $("#grid").classList.toggle("d-none", faces);
+    $("#empty").classList.toggle("d-none", faces || state.total > 0);
+    if (faces) { this.items = []; this.selected.clear(); this.load(); }
+  },
+
+  async load() {
+    const cid = this.cid;
+    const res = await api(`/api/faces/clusters/${cid}/faces?offset=${this.items.length}&limit=240&sort=${$("#fgSort").value}`);
+    if (cid !== this.cid) return;
+    this.items.push(...res.items);
+    this.total = res.total;
+    this.draw();
+  },
+
+  draw() {
+    $("#faceGrid").innerHTML = this.items.map((f, i) =>
+      `<div class="face-cell ${this.selected.has(f.id) ? "selected" : ""}" data-fi="${i}" title="${esc(f.filename)}">
+        <img loading="lazy" src="/api/faces/${f.id}/thumb" alt="">
+        <i class="bi bi-check-circle-fill fc-check"></i>
+        ${f.taken_at ? `<span class="fc-date">${esc(f.taken_at.slice(0, 10).split("-").reverse().join("/"))}</span>` : ""}
+        ${f.manual ? `<i class="bi bi-person-check fc-manual" title="${esc(t("faces.manualTip"))}"></i>` : ""}
+        <i class="bi bi-box-arrow-up-right fc-open" data-open="${f.photo_id}" title="${esc(t("faces.openPhoto"))}"></i></div>`).join("");
+    $("#fgMore").classList.toggle("d-none", this.items.length >= this.total);
+    this.bar();
+  },
+
+  bar() {
+    const n = this.selected.size;
+    $("#fgCount").textContent = t("faces.selCount", { n, total: this.total });
+    for (const id of ["#fgAssign", "#fgUnassign", "#fgIgnore"]) $(id).disabled = !n;
+  },
+
+  async apply(action) {
+    const ids = [...this.selected];
+    if (!ids.length) return;
+    let name = null;
+    if (action === "assign") {
+      name = $("#fgName").value.trim();
+      if (!name) { $("#fgName").focus(); return; }
+    }
+    await api("/api/faces/update", { json: { face_ids: ids, action, name } });
+    toast(t(`faces.done.${action}`, { name: name || "" }) + ` (${ids.length})`);
+    $("#fgName").value = "";
+    await loadSidebar();
+    faceUI.loadNames();
+    const left = (await api(`/api/faces/clusters/${this.cid}/faces?limit=1`)).total;
+    if (!left) {   // plus aucun visage ici : on suit les visages nommés, sinon retour à toutes les photos
+      const target = state.clusters.find((c) => name && c.name && c.name.toLowerCase() === name.toLowerCase());
+      setView(target ? { type: "cluster", id: target.id } : { type: "all" });
+      return;
+    }
+    this.items = []; this.selected.clear();
+    updateTitle();
+    this.load();
+  },
+
+  // Groupes non nommés qui ressemblent à la personne affichée
+  async suggestions() {
+    const box = $("#faceSuggest"), c = this.cluster(), cid = this.cid;
+    box.classList.add("d-none");
+    if (!c || !c.name) return;
+    const list = await api(`/api/faces/clusters/${cid}/suggestions`);
+    if (cid !== this.cid || !list.length) return;
+    box.innerHTML = `<div class="small"><i class="bi bi-lightbulb me-1"></i>${esc(t("faces.suggestTitle", { name: c.name }))}</div>
+      <div class="fs-items">${list.map((s) => `<div class="fs-item" data-sug="${s.id}">
+        <img src="/api/faces/${s.cover}/thumb" alt="" data-sug-open="${s.id}" title="${esc(t("faces.seeGroup"))}">
+        <div class="text-body-secondary">${esc(t("faces.sugPhotos", { n: s.photos }))}</div>
+        <div class="btn-group btn-group-sm mt-1">
+          <button class="btn btn-outline-success" data-sug-yes="${s.id}" title="${esc(t("faces.sugYes", { name: c.name }))}"><i class="bi bi-check-lg"></i></button>
+          <button class="btn btn-outline-secondary" data-sug-no="${s.id}" title="${esc(t("faces.sugNo"))}"><i class="bi bi-x-lg"></i></button>
+        </div></div>`).join("")}</div>`;
+    box.classList.remove("d-none");
+  },
+};
+
+$("#clusterMode").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-mode]");
+  if (b) faceGrid.setMode(b.dataset.mode);
+});
+$("#faceGrid").addEventListener("click", async (e) => {
+  const open = e.target.closest("[data-open]");
+  if (open) {   // ouvrir la photo : retour à la vue photos de la personne, positionnée sur la photo
+    const pid = +open.dataset.open;
+    faceGrid.setMode("photos");
+    const q = viewParams(); q.set("pid", pid);
+    const { index } = await api(`/api/photos/index?${q}`);
+    if (index != null) { await ensureIndex(index); viewer.open(index); }
+    return;
+  }
+  const cell = e.target.closest(".face-cell");
+  if (!cell) return;
+  const i = +cell.dataset.fi, id = faceGrid.items[i].id;
+  if (e.shiftKey && faceGrid.last != null) {
+    const [a, b] = [Math.min(i, faceGrid.last), Math.max(i, faceGrid.last)];
+    for (let k = a; k <= b; k++) faceGrid.selected.add(faceGrid.items[k].id);
+  } else if (faceGrid.selected.has(id)) {
+    faceGrid.selected.delete(id);
+  } else {
+    faceGrid.selected.add(id);
+  }
+  faceGrid.last = i;
+  faceGrid.draw();
+});
+$("#fgAll").onclick = () => { faceGrid.items.forEach((f) => faceGrid.selected.add(f.id)); faceGrid.draw(); };
+$("#fgNone").onclick = () => { faceGrid.selected.clear(); faceGrid.draw(); };
+$("#fgMore").onclick = () => faceGrid.load();
+try { $("#viewSort").value = localStorage.getItem("viewSort") || ""; } catch (_) { /* défaut */ }
+$("#viewSort").onchange = () => {
+  try { localStorage.setItem("viewSort", $("#viewSort").value); } catch (_) { /* stockage indisponible */ }
+  setView(state.view);
+};
+$("#fgSort").onchange = () => {
+  try { localStorage.setItem("faceSort", $("#fgSort").value); } catch (_) { /* stockage indisponible */ }
+  faceGrid.items = []; faceGrid.load();
+};
+try { $("#fgSort").value = localStorage.getItem("faceSort") || "date_desc"; } catch (_) { /* défaut */ }
+$("#fgAssign").onclick = () => faceGrid.apply("assign");
+$("#fgUnassign").onclick = () => faceGrid.apply("unassign");
+$("#fgIgnore").onclick = () => faceGrid.apply("ignore");
+$("#fgName").addEventListener("keydown", (e) => { if (e.key === "Enter") faceGrid.apply("assign"); });
+$("#faceSuggest").addEventListener("click", async (e) => {
+  const yes = e.target.closest("[data-sug-yes]"), no = e.target.closest("[data-sug-no]"), op = e.target.closest("[data-sug-open]");
+  const cid = faceGrid.cid;
+  if (yes) {
+    await api(`/api/faces/clusters/${cid}/merge`, { json: { others: [+yes.dataset.sugYes] } });
+    toast(t("faces.merged", { name: faceGrid.cluster()?.name || "" }));
+    await loadSidebar();
+    setView({ type: "cluster", id: cid }, { keepScroll: true });
+  } else if (no) {
+    await api(`/api/faces/clusters/${cid}/reject`, { json: { other: +no.dataset.sugNo } });
+    no.closest(".fs-item").remove();
+    if (!$("#faceSuggest .fs-item")) $("#faceSuggest").classList.add("d-none");
+  } else if (op) {
+    setView({ type: "cluster", id: +op.dataset.sugOpen });
+  }
+});
+faceUI.loadNames();

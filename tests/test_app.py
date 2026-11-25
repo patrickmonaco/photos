@@ -3,6 +3,7 @@ import shutil
 import io
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -388,3 +389,31 @@ def test_videos_and_heic(env):
     # Export d'une vidéo = l'original
     assert c.get(f"/api/photos/{vid}/export").content == (d / "clip.mp4").read_bytes()
     assert {f: md5(d / f) for f in before} == before
+
+
+def test_enhance_strength_retroactive(env):
+    c, lib, library = env
+    items = [i for i in c.get("/api/photos").json()["items"] if i.get("media") != "video"]
+    target = items[0]
+    det = c.get(f"/api/photos/{target['id']}").json()
+    ops = [o for o in det["ops"] if o["op"] != "autoenhance"] + [{"op": "autoenhance", "strength": 1.0, "wb": [1, 1, 1],
+                                                                 "black": 0, "white": 255, "gamma": 1, "clahe": 1,
+                                                                 "vibrance": 0}]
+    assert c.put(f"/api/photos/{target['id']}/ops", json={"ops": ops}).status_code == 200
+    info = c.get("/api/enhance/strength").json()
+    assert info["photos"] >= 1
+    old_hash = c.get(f"/api/photos/{target['id']}").json()["ops_hash"]
+    c.post("/api/enhance/strength", json={"strength": 0.5})
+    for _ in range(200):
+        st = c.get("/api/enhance/strength").json()
+        if not st["running"]:
+            break
+        time.sleep(0.05)
+    assert st["result"]["photos"] == info["photos"] and st["strength"] == 0.5
+    rows = library.db.query("SELECT ops FROM photo WHERE ops LIKE '%autoenhance%'")
+    strengths = {o["strength"] for r in rows for o in json.loads(r["ops"]) if o["op"] == "autoenhance"}
+    assert strengths == {0.5}                        # main et Picasa
+    det = c.get(f"/api/photos/{target['id']}").json()
+    assert det["ops_hash"] != old_hash               # vignette recalculée
+    side = json.loads((lib / det["folder"] / ".phototheque.json").read_text(encoding="utf-8"))
+    assert [o for o in side["photos"][det["filename"]]["ops"] if o["op"] == "autoenhance"][0]["strength"] == 0.5

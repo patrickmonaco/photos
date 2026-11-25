@@ -126,10 +126,22 @@ class AIService:
         self.db.execute("UPDATE job SET status=?, result=?, error=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
                         (status, json.dumps(result) if result is not None else None, error, job_id))
 
+    last_activity = 0.0
+    PAUSE_AFTER_ACTIVITY = 2.5
+
+    def user_active(self) -> None:
+        """Appelé à chaque affichage de photo : l'IA s'efface quelques secondes."""
+        self.last_activity = time.time()
+
+    def _yield_to_user(self) -> None:
+        while time.time() - self.last_activity < self.PAUSE_AFTER_ACTIVITY:
+            time.sleep(0.2)
+
     def process_pending(self, max_jobs: int | None = None) -> int:
         """Traite des jobs ; renvoie le nombre traité (utilisé par le worker et les tests)."""
         done = 0
         while max_jobs is None or done < max_jobs:
+            self._yield_to_user()
             rows = self._claim(16)
             if not rows:
                 break
@@ -140,6 +152,7 @@ class AIService:
                     self._run_clip(rows)
                 else:
                     for r in rows:
+                        self._yield_to_user()
                         try:
                             res = self._run_faces(r["photo_id"]) if kind == "faces" \
                                 else self._run_perspective(r["photo_id"])
@@ -317,6 +330,8 @@ class AIService:
         s = self.config.settings
         removed = self._removed_tags(pid)
         named_clusters: list[tuple[int, str]] = []
+        decisions = self._sidecar_faces(self.lib.sidecars.load(self.lib.folder_path(row))["photos"]
+                                        .get(row["filename"], {}))
         # Calcul des signatures AVANT la transaction : le verrou d'écriture n'est tenu que le temps
         # des écritures, jamais pendant l'inférence.
         embs = [model.embed(img, d["kps"]) for d in dets]
@@ -327,6 +342,29 @@ class AIService:
                 x1, y1, x2, y2 = d["box"]
                 rel = (max(0.0, float(x1) / w), max(0.0, float(y1) / h),
                        min(1.0, float(x2) / w), min(1.0, float(y2) / h))
+                # Décision de l'utilisateur enregistrée pour ce visage : elle prime sur tout le reste.
+                dec = max(decisions, key=lambda x: ai.iou(rel, tuple(x["box"])), default=None)
+                if dec is not None and ai.iou(rel, tuple(dec["box"])) > 0.4:
+                    if dec.get("ignore") or dec.get("unknown"):
+                        self.db.execute("INSERT INTO face(photo_id, l, t, r, b, person, source, score, embedding, "
+                                        "cluster_id, manual, ignored) VALUES (?,?,?,?,?,NULL,'ai',?,?,-1,1,?)",
+                                        (pid, *rel, d["score"], emb.tobytes(), 1 if dec.get("ignore") else 0))
+                        continue
+                    if dec.get("person"):
+                        # rattachement forcé au groupe de ce nom (créé au besoin), jamais au plus ressemblant
+                        if not self.db.one("SELECT 1 FROM face_cluster WHERE lower(name)=lower(?)", (dec["person"],)):
+                            self._cluster_for_name(dec["person"], emb.tobytes())
+                            self.invalidate_clusters()
+                        cid, cname, newly_named = self._assign_cluster(emb, dec["person"], s.face_cluster_threshold)
+                        self.db.execute("INSERT INTO face(photo_id, l, t, r, b, person, source, score, embedding, "
+                                        "cluster_id, manual) VALUES (?,?,?,?,?,?,'ai',?,?,?,1)",
+                                        (pid, *rel, dec["person"], d["score"], emb.tobytes(), cid))
+                        if newly_named:
+                            named_clusters.append((cid, cname))
+                        if dec["person"].lower() not in removed:
+                            self.db.execute("INSERT OR IGNORE INTO photo_tag(photo_id, tag_id, source) "
+                                            "VALUES (?,?,'face')", (pid, self.db.tag_id(dec["person"], "person")))
+                        continue
                 person = next((p["person"] for p in picasa
                                if ai.iou(rel, (p["l"], p["t"], p["r"], p["b"])) > 0.3), None)
                 cid, cname, newly_named = self._assign_cluster(emb, person, s.face_cluster_threshold)
@@ -441,17 +479,9 @@ class AIService:
             self.db.execute("UPDATE face_cluster SET name=? WHERE id=?", (name, cid))
             self.db.execute("UPDATE face SET person=? WHERE cluster_id=?", (name, cid))
         self.invalidate_clusters()
-        # Le nom est enregistré dans les directives des photos (tag « personne »), donc durable.
+        # Le nom est enregistré dans les directives des photos (visages nommés), donc durable.
         pids = [r["photo_id"] for r in self.db.query("SELECT DISTINCT photo_id FROM face WHERE cluster_id=?", (cid,))]
-        for pid in pids:
-            row = self.lib.photo(pid)
-            folder = self.lib.folder_path(row)
-            entry = self.lib.sidecars.load(folder)["photos"].get(row["filename"], {})
-            people = list(entry.get("people", []))
-            if name.lower() not in {p.lower() for p in people}:
-                people.append(name)
-                self.lib.sidecars.update_photo(folder, row["filename"], people=people)
-            self.lib.refresh_photo(pid)
+        self._persist_faces(pids)
         return cid
 
     def delete_cluster(self, cid: int) -> dict:
@@ -466,22 +496,198 @@ class AIService:
         with self.db.transaction():
             self.db.execute("UPDATE face SET cluster_id=-1, person=NULL WHERE cluster_id=?", (cid,))
             self.db.execute("DELETE FROM face_cluster WHERE id=?", (cid,))
-            if name:
-                for pid in pids:
-                    self.db.execute("DELETE FROM photo_tag WHERE photo_id=? AND source='face' AND tag_id IN "
-                                    "(SELECT id FROM tag WHERE lower(name)=lower(?) AND kind='person')", (pid, name))
-        if name:
-            # Nom enregistré dans les directives par « Nommer ce groupe » : on le retire aussi.
-            for pid in pids:
-                row = self.lib.photo(pid)
-                folder = self.lib.folder_path(row)
-                entry = self.lib.sidecars.load(folder)["photos"].get(row["filename"], {})
-                people = [p for p in entry.get("people", []) if p.lower() != name.lower()]
-                if len(people) != len(entry.get("people", [])):
-                    self.lib.sidecars.update_photo(folder, row["filename"], people=people or None)
-                    self.lib.refresh_photo(pid)
-        self.db.execute("DELETE FROM tag WHERE id NOT IN (SELECT tag_id FROM photo_tag)")
+        # Directives et tags « personne » mis à jour (le nom retiré des photos du groupe).
+        self._persist_faces(pids, {pid: {name} for pid in pids} if name else None)
         return {"deleted": True, "photos": len(pids), "name": name}
+
+    # ------------------------------------------------------------------ gestion manuelle des visages
+    # Les décisions de l'utilisateur (nom donné à un visage, visage retiré d'un groupe, « pas un
+    # visage ») sont enregistrées dans les directives du dossier (.phototheque.json, clé « faces » de
+    # la photo) : elles survivent à une réindexation et sont réappliquées à chaque nouvelle analyse.
+
+    def _recompute_centroids(self, cids) -> None:
+        for cid in {c for c in cids if c and c > 0}:
+            rows = self.db.query("SELECT embedding FROM face WHERE cluster_id=? AND embedding IS NOT NULL", (cid,))
+            if not rows:
+                self.db.execute("DELETE FROM face_cluster WHERE id=?", (cid,))
+                continue
+            m = np.frombuffer(b"".join(r["embedding"] for r in rows), dtype=np.float32).reshape(len(rows), -1)
+            c = m.mean(axis=0)
+            c /= np.linalg.norm(c) or 1.0
+            self.db.execute("UPDATE face_cluster SET centroid=?, n=? WHERE id=?",
+                            (c.astype(np.float32).tobytes(), len(rows), cid))
+
+    def _cluster_for_name(self, name: str, emb: bytes | None) -> int:
+        row = self.db.one("SELECT id FROM face_cluster WHERE lower(name)=lower(?) ORDER BY n DESC LIMIT 1", (name,))
+        if row:
+            return row["id"]
+        return self.db.execute("INSERT INTO face_cluster(name, centroid, n) VALUES (?,?,0)",
+                               (name, emb or np.zeros(512, np.float32).tobytes())).lastrowid
+
+    def _sync_face_tags(self, pid: int) -> None:
+        """Tags « personne » venant des visages = noms des visages de la photo (hors faux visages)."""
+        removed = self._removed_tags(pid)
+        self.db.execute("DELETE FROM photo_tag WHERE photo_id=? AND source='face'", (pid,))
+        for r in self.db.query("SELECT DISTINCT person FROM face WHERE photo_id=? AND source='ai' "
+                               "AND person IS NOT NULL AND coalesce(ignored, 0)=0", (pid,)):
+            if r["person"].lower() not in removed:
+                self.db.execute("INSERT OR IGNORE INTO photo_tag(photo_id, tag_id, source) VALUES (?,?,'face')",
+                                (pid, self.db.tag_id(r["person"], "person")))
+
+    def _persist_faces(self, pids, dropped_names: dict[int, set[str]] | None = None) -> None:
+        """Écrit l'état des visages nommés ou corrigés dans les directives, un fichier par dossier.
+        dropped_names : noms retirés d'une photo, à enlever aussi de sa liste « people » (anciennes versions)."""
+        by_folder: dict = {}
+        for pid in set(pids):
+            row = self.lib.photo(pid)
+            if row is None:
+                continue
+            faces = []
+            for f in self.db.query("SELECT l, t, r, b, person, manual, ignored FROM face WHERE photo_id=? "
+                                   "AND source='ai' ORDER BY l", (pid,)):
+                box = [round(f["l"], 4), round(f["t"], 4), round(f["r"], 4), round(f["b"], 4)]
+                if f["ignored"]:
+                    faces.append({"box": box, "ignore": True})
+                elif f["person"]:
+                    faces.append({"box": box, "person": f["person"]})
+                elif f["manual"]:
+                    faces.append({"box": box, "unknown": True})
+            by_folder.setdefault(self.lib.folder_path(row), []).append((row["filename"], faces, pid))
+
+        for folder, items in by_folder.items():
+            def updater(photos, items=items):
+                for filename, faces, pid in items:
+                    entry = photos.setdefault(filename, {})
+                    if faces:
+                        entry["faces"] = faces
+                    else:
+                        entry.pop("faces", None)
+                    drop = {n.lower() for n in (dropped_names or {}).get(pid, set())}
+                    drop -= {f["person"].lower() for f in faces if f.get("person")}
+                    if drop and entry.get("people"):
+                        people = [p for p in entry["people"] if p.lower() not in drop]
+                        if people:
+                            entry["people"] = people
+                        else:
+                            entry.pop("people", None)
+            self.lib.sidecars.update_folder(folder, updater)
+        for _, items in by_folder.items():
+            for _, _, pid in items:
+                self.lib.refresh_photo(pid)
+                self._sync_face_tags(pid)
+        self.db.execute("DELETE FROM tag WHERE id NOT IN (SELECT tag_id FROM photo_tag)")
+
+    @staticmethod
+    def _sidecar_faces(entry: dict) -> list[dict]:
+        return [f for f in entry.get("faces", []) if isinstance(f, dict) and len(f.get("box", [])) == 4]
+
+    def update_faces(self, face_ids: list[int], action: str, name: str | None = None,
+                     cluster: int | None = None) -> dict:
+        """Corrige des visages : 'assign' (à une personne nommée ou à un groupe), 'unassign'
+        (ce n'est pas cette personne : visage sorti de son groupe), 'ignore' (pas un visage)."""
+        rows = self.db.query(f"SELECT id, photo_id, cluster_id, person, embedding FROM face WHERE source='ai' "
+                             f"AND id IN ({','.join('?' * len(face_ids))})", tuple(face_ids)) if face_ids else []
+        if not rows:
+            return {"updated": 0}
+        name = (name or "").strip() or None
+        touched = {r["cluster_id"] for r in rows}
+        dropped: dict[int, set[str]] = {}
+        with self.db.transaction():
+            target, target_name = None, None
+            if action == "assign":
+                if name:
+                    target, target_name = self._cluster_for_name(name, rows[0]["embedding"]), name
+                elif cluster:
+                    c = self.db.one("SELECT id, name FROM face_cluster WHERE id=?", (cluster,))
+                    if not c:
+                        raise ValueError("groupe inconnu")
+                    target, target_name = c["id"], c["name"]
+                else:
+                    raise ValueError("nom ou groupe attendu")
+                touched.add(target)
+            for r in rows:
+                if r["person"] and r["person"] != target_name:
+                    dropped.setdefault(r["photo_id"], set()).add(r["person"])
+                if action == "assign":
+                    self.db.execute("UPDATE face SET cluster_id=?, person=?, manual=1, ignored=0 WHERE id=?",
+                                    (target, target_name, r["id"]))
+                elif action == "unassign":
+                    self.db.execute("UPDATE face SET cluster_id=-1, person=NULL, manual=1, ignored=0 WHERE id=?",
+                                    (r["id"],))
+                elif action == "ignore":
+                    self.db.execute("UPDATE face SET cluster_id=-1, person=NULL, manual=1, ignored=1 WHERE id=?",
+                                    (r["id"],))
+                else:
+                    raise ValueError(f"action inconnue : {action}")
+            self._recompute_centroids(touched)
+        self.invalidate_clusters()
+        self._persist_faces([r["photo_id"] for r in rows], dropped)
+        return {"updated": len(rows), "cluster": target, "name": target_name}
+
+    def cluster_faces(self, cid: int, offset: int = 0, limit: int = 200, sort: str = "date_desc") -> dict:
+        order = {"date_desc": "p.taken_at DESC, f.id", "date_asc": "p.taken_at, f.id",
+                 "score": "f.score DESC, f.id"}.get(sort, "p.taken_at DESC, f.id")
+        total = self.db.one("SELECT COUNT(*) n FROM face WHERE cluster_id=?", (cid,))["n"]
+        rows = self.db.query(f"SELECT f.id, f.photo_id, f.score, f.manual, p.filename, p.taken_at FROM face f "
+                             f"JOIN photo p ON p.id=f.photo_id WHERE f.cluster_id=? "
+                             f"ORDER BY {order} LIMIT ? OFFSET ?", (cid, limit, offset))
+        return {"total": total, "items": [dict(r) for r in rows]}
+
+    def cluster_suggestions(self, cid: int, limit: int = 12) -> list[dict]:
+        """Groupes non nommés qui ressemblent à ce groupe (même personne probable), du plus proche
+        au moins proche. Comparaison des centres de groupes, en mémoire : instantané."""
+        with self._clu_lock:
+            m = self._clusters_mem()
+            if cid not in m["ids"]:
+                return []
+            i = m["ids"].index(cid)
+            k = m["k"]
+            sims = m["cents"][:k] @ m["cents"][i]
+            ids, names = list(m["ids"]), list(m["names"])
+        rejected = {r["b"] for r in self.db.query("SELECT b FROM face_cluster_reject WHERE a=?", (cid,))} | \
+                   {r["a"] for r in self.db.query("SELECT a FROM face_cluster_reject WHERE b=?", (cid,))}
+        floor = self.config.settings.face_cluster_threshold - 0.15
+        order = np.argsort(-sims)
+        out = []
+        for j in order:
+            j = int(j)
+            if j == i or names[j] or ids[j] in rejected or float(sims[j]) < floor:
+                continue
+            out.append({"id": ids[j], "similarity": round(float(sims[j]), 3)})
+            if len(out) >= limit * 3:
+                break
+        if not out:
+            return []
+        stats = {r["cluster_id"]: dict(r) for r in self.db.query(
+            f"SELECT cluster_id, COUNT(*) n, COUNT(DISTINCT photo_id) photos, "
+            f"(SELECT id FROM face f2 WHERE f2.cluster_id=face.cluster_id ORDER BY score DESC LIMIT 1) cover "
+            f"FROM face WHERE cluster_id IN ({','.join('?' * len(out))}) GROUP BY cluster_id",
+            tuple(o["id"] for o in out))}
+        res = [{**o, **stats[o["id"]]} for o in out if o["id"] in stats]
+        return res[:limit]
+
+    def reject_suggestion(self, cid: int, other: int) -> None:
+        a, b = sorted((cid, other))
+        self.db.execute("INSERT OR IGNORE INTO face_cluster_reject(a, b) VALUES (?, ?)", (a, b))
+
+    def merge_clusters(self, cid: int, others: list[int]) -> int:
+        """Fusionne des groupes dans cid (qui garde son nom)."""
+        others = [o for o in others if o != cid]
+        if not others:
+            return cid
+        name = (self.db.one("SELECT name FROM face_cluster WHERE id=?", (cid,)) or {"name": None})["name"]
+        marks = ",".join("?" * len(others))
+        pids = [r["photo_id"] for r in self.db.query(
+            f"SELECT DISTINCT photo_id FROM face WHERE cluster_id IN ({marks})", tuple(others))]
+        with self.db.transaction():
+            self.db.execute(f"UPDATE face SET cluster_id=?, person=coalesce(?, person) WHERE cluster_id IN ({marks})",
+                            (cid, name, *others))
+            self.db.execute(f"DELETE FROM face_cluster WHERE id IN ({marks})", tuple(others))
+            self._recompute_centroids([cid])
+        self.invalidate_clusters()
+        if name:
+            self._persist_faces(pids)
+        return cid
 
     def face_thumb(self, face_id: int, size: int = 160) -> Image.Image | None:
         f = self.db.one("SELECT * FROM face WHERE id=?", (face_id,))

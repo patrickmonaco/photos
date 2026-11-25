@@ -105,6 +105,45 @@ def apply_ops(img: Image.Image, ops: list[dict], default_f35: float = 28.0,
     return img
 
 
+def map_box(box, ops: list[dict], w: float, h: float):
+    """Position d'un rectangle (coordonnées relatives à la photo d'origine, orientée) dans l'image
+    rendue avec ses retouches. Renvoie (l, t, r, b) relatifs à l'image rendue, ou None si une
+    opération ne permet pas ce calcul (perspective)."""
+    pts = [(box[0] * w, box[1] * h), (box[2] * w, box[1] * h), (box[2] * w, box[3] * h), (box[0] * w, box[3] * h)]
+    for op in ops or []:
+        kind = op.get("op")
+        if kind == "rotate90":
+            n = int(op.get("n", 1)) % 4
+            for _ in range(n):              # quart de tour horaire : (x, y) -> (h - y, x)
+                pts = [(h - y, x) for x, y in pts]
+                w, h = h, w
+        elif kind == "straighten":
+            deg = float(op.get("deg", 0))
+            if abs(deg) < 1e-3:
+                continue
+            th = math.radians(deg)
+            cx, cy = w / 2, h / 2
+            c, sn = math.cos(th), math.sin(th)
+            # image tournée de deg dans le sens horaire (rotate(-deg)), puis recadrée au centre
+            pts = [(cx + (x - cx) * c - (y - cy) * sn, cy + (x - cx) * sn + (y - cy) * c) for x, y in pts]
+            k = math.cos(math.radians(abs(deg))) + math.sin(math.radians(abs(deg))) * max(w, h) / min(w, h)
+            cw, ch = w / k, h / k
+            left, top = (w - cw) / 2, (h - ch) / 2
+            pts = [(x - left, y - top) for x, y in pts]
+            w, h = cw, ch
+        elif kind == "crop":
+            l, r = sorted((max(0.0, min(1.0, op["l"])), max(0.0, min(1.0, op["r"]))))
+            t, b = sorted((max(0.0, min(1.0, op["t"])), max(0.0, min(1.0, op["b"]))))
+            if r - l < 0.01 or b - t < 0.01:
+                continue
+            pts = [(x - l * w, y - t * h) for x, y in pts]
+            w, h = (r - l) * w, (b - t) * h
+        elif kind == "perspective":
+            return None
+    xs, ys = [x for x, _ in pts], [y for _, y in pts]
+    return (min(xs) / w, min(ys) / h, max(xs) / w, max(ys) / h)
+
+
 def render(path: Path, ops: list[dict], size: int, default_f35: float = 28.0,
            photo_f35: float | None = None, duration: float | None = None) -> Image.Image:
     # Ouverture adaptée au type de fichier (JPEG décodé en taille réduite, HEIC, RAW, image d'une vidéo).
@@ -159,21 +198,42 @@ class RenderCache:
             return self.full_dir / f"{pid}_{ops_hash}.jpg"
         return self.cache_dir / f"{pid % 256:02x}" / f"{pid}_{ops_hash}_{size}.jpg"
 
-    def get_or_render(self, pid: int, ops_hash: str, size: int, producer) -> Path:
-        p = self.path(pid, ops_hash, size)
+    _locks: dict = {}
+    _locks_guard = threading.Lock()
+
+    def _hit(self, p: Path) -> bool:
         try:
             st = p.stat()
-            if time.time() - st.st_mtime > self.TOUCH_AFTER:
-                os.utime(p)  # « vu récemment » pour la purge
-            return p
         except FileNotFoundError:
-            pass
+            return False
+        if time.time() - st.st_mtime > self.TOUCH_AFTER:
+            os.utime(p)  # « vu récemment » pour la purge
+        return True
+
+    def get_or_render(self, pid: int, ops_hash: str, size: int, producer) -> Path:
+        p = self.path(pid, ops_hash, size)
+        if self._hit(p):
+            return p
+        # Un seul calcul par image : une demande identique (préchargement puis affichage, par
+        # exemple) attend la première au lieu de refaire le travail.
+        with self._locks_guard:
+            lock = self._locks.setdefault(str(p), threading.Lock())
+        with lock:
+            try:
+                if self._hit(p):
+                    return p
+                return self._produce(p, pid, size, producer)
+            finally:
+                with self._locks_guard:
+                    self._locks.pop(str(p), None)
+
+    def _produce(self, p: Path, pid: int, size: int, producer) -> Path:
         p.parent.mkdir(parents=True, exist_ok=True)
         pattern = f"{pid}_*.jpg" if size == 0 else f"{pid}_*_{size}.jpg"
         for old in p.parent.glob(pattern):
             old.unlink(missing_ok=True)
         data = to_jpeg(producer(), quality=82 if size and size <= 400 else 90)
-        tmp = p.with_suffix(".tmp")
+        tmp = p.with_suffix(f".{threading.get_ident()}.tmp")
         tmp.write_bytes(data)
         tmp.replace(p)
         if size == 0:

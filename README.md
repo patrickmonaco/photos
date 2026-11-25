@@ -127,6 +127,25 @@ Tout tourne en local avec ONNX Runtime (GPU utilisé si disponible : CUDA, ou Di
   (`vision_model.onnx`, `text_model.onnx`, `tokenizer.json`) et `<données>/models/buffalo_l/`
   (`det.onnx` = det_10g, `rec.onnx` = w600k_r50).
 
+## Gestion des visages
+
+- **Onglet Visages** : les personnes nommées d'un côté, les **personnes non identifiées** de
+  l'autre (groupes de visages semblables formés par l'IA).
+- **Sur la photo** : touche **F** ou bouton en haut de l'image pour afficher les cadres des visages,
+  placés correctement même après rotation, redressement ou recadrage (pas avec la correction de
+  perspective). Un clic sur un cadre, ou sur une personne dans « Personnes sur la photo », ouvre un
+  menu : nommer ou changer le nom, voir toutes ses photos, « Ce n'est pas cette personne »
+  (le visage sort du groupe et le nom est retiré de la photo), « Ce n'est pas un visage ».
+- **Vue Visages d'une personne** : bouton Photos / Visages en haut de la liste. Les visages sont
+  affichés en grille ; on en sélectionne plusieurs (clic, Maj+clic) pour les nommer, les déplacer
+  vers une autre personne, les retirer ou les ignorer en une fois.
+- **Suggestions** : pour une personne nommée, les groupes non identifiés qui lui ressemblent sont
+  proposés en haut de la vue ; ✓ les réunit, ✗ écarte la suggestion durablement.
+- **Fusion** : donner à un groupe le nom d'une personne existante réunit les deux.
+
+Chaque décision est enregistrée dans `.phototheque.json` (clé `faces` de la photo, avec la
+position du visage) : elle est réappliquée après une réindexation ou une nouvelle analyse.
+
 ## Publication d'un album sur WordPress
 
 Réglages › Publication sur WordPress : l'adresse du blog, l'identifiant et un **mot de passe

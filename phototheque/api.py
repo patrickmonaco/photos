@@ -20,7 +20,8 @@ from .config import Config
 from .library import Library, ops_hash
 from .metadata import read_camera
 from .picasa import parse_folder_cached
-from .render import SIZES, RenderCache, render, to_jpeg
+from .ai import iou as ai_iou
+from .render import SIZES, RenderCache, map_box, render, to_jpeg
 from .watcher import FolderWatcher
 
 STATIC = Path(__file__).parent / "static"
@@ -68,6 +69,7 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
     # Les miniatures passent par un nombre limité de rendus simultanés, pour que l'aperçu
     # de la visionneuse ne fasse pas la queue derrière une grille entière.
     thumb_slots = threading.Semaphore(3)
+    prefetch_slots = threading.Semaphore(1)   # préchargement des voisines : jamais devant la photo demandée
 
     def scan_then_enqueue():
         t = time.time()
@@ -264,6 +266,7 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
         where, params, order, order_params = [], [], "p.taken_at, p.filename", []
         if f.get("cluster") not in (None, ""):
             where.append("p.id IN (SELECT photo_id FROM face WHERE cluster_id=?)"); params.append(int(f["cluster"]))
+            order = "p.taken_at DESC, p.filename"     # les photos d'une personne : les plus récentes d'abord
         if f.get("root") is not None:
             where.append("p.root=?"); params.append(f["root"])
         folder = f.get("folder")
@@ -285,6 +288,10 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
             where.append("p.id IN (SELECT photo_id FROM album_photo WHERE album_id=?)"); params.append(f["album"])
             order = "(SELECT position FROM album_photo WHERE album_id=? AND photo_id=p.id), p.taken_at"
             order_params = [f["album"]]
+        # Tri choisi dans la barre d'outils (sauf pour un album, qui garde son ordre)
+        if f.get("sort") in ("date_desc", "date_asc") and not f.get("album"):
+            order = "p.taken_at DESC, p.filename" if f["sort"] == "date_desc" else "p.taken_at, p.filename"
+            order_params = []
         if str(f.get("starred", "")).lower() in ("1", "true"):
             where.append("p.star=1")
         if f.get("q"):
@@ -346,6 +353,7 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
 
     @app.get("/api/photos/{pid}")
     def photo_detail(pid: int):
+        aisvc.user_active()
         row = get_photo(pid)
         d = dict(row)
         d["ops"] = json.loads(row["ops"] or "[]")
@@ -357,8 +365,19 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
             "WHERE pt.photo_id=? ORDER BY t.kind, lower(t.name)", (pid,))]
         d["albums"] = [dict(r) for r in lib.db.query(
             "SELECT a.id, a.name FROM album_photo ap JOIN album a ON a.id=ap.album_id WHERE ap.photo_id=?", (pid,))]
-        d["faces"] = [dict(r) for r in lib.db.query(
-            "SELECT id, l, t, r, b, person, source, cluster_id FROM face WHERE photo_id=?", (pid,))]
+        ops_now = json.loads(row["ops"] or "[]")
+        faces = [dict(r) for r in lib.db.query(
+            "SELECT id, l, t, r, b, person, source, cluster_id, coalesce(manual, 0) manual, "
+            "coalesce(ignored, 0) ignored FROM face WHERE photo_id=? ORDER BY l", (pid,))]
+        ai_boxes = [f for f in faces if f["source"] == "ai"]
+        for f in faces:
+            # position du visage dans l'image affichée (retouches comprises) ; None : perspective
+            v = map_box((f["l"], f["t"], f["r"], f["b"]), ops_now, row["width"] or 1, row["height"] or 1)
+            f["view"] = [round(x, 4) for x in v] if v else None
+            # visage Picasa déjà retrouvé par l'IA : affiché une seule fois
+            f["duplicate"] = f["source"] == "picasa" and any(
+                ai_iou((f["l"], f["t"], f["r"], f["b"]), (a["l"], a["t"], a["r"], a["b"])) > 0.3 for a in ai_boxes)
+        d["faces"] = faces
         d["has_embedding"] = bool(lib.db.one("SELECT 1 FROM embedding WHERE photo_id=?", (pid,)))
         if row["camera"] is None:  # photo indexée avant la v0.5 : lecture à la demande
             cam, orient = read_camera(lib.abs_path(row))
@@ -400,9 +419,15 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
         row = get_photo(pid)
         size = SIZES[size_name]
         ops = json.loads(row["ops"] or "[]")
-        path = cache.get_or_render(pid, row["ops_hash"] or ops_hash(ops), size,
-                                   lambda: render(lib.abs_path(row), ops, size,
-                                                  config.settings.default_f35, row["f35"], row["duration"]))
+        def produce():
+            t0 = time.time()
+            img = render(lib.abs_path(row), ops, size, config.settings.default_f35, row["f35"], row["duration"])
+            dt = time.time() - t0
+            if dt > 1.5:
+                log.warning("rendu lent (%s, %.1f s) : %s [%s]", size_name, dt, row["filename"],
+                            ", ".join(o.get("op", "?") for o in ops) or "sans retouche")
+            return img
+        path = cache.get_or_render(pid, row["ops_hash"] or ops_hash(ops), size, produce)
         return FileResponse(path, media_type="image/jpeg",
                             headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
@@ -415,12 +440,17 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
             return _rendered(pid, "thumb")
 
     @app.get("/api/photos/{pid}/preview")
-    def preview(pid: int):
+    def preview(pid: int, prefetch: int = 0):
+        if prefetch:
+            with prefetch_slots:
+                return _rendered(pid, "preview")
+        aisvc.user_active()
         return _rendered(pid, "preview")
 
     @app.get("/api/photos/{pid}/full")
     def full(pid: int):
         """Rendu pleine résolution avec les retouches (zoom de la visionneuse)."""
+        aisvc.user_active()
         return _rendered(pid, "full")
 
     @app.get("/api/photos/{pid}/original")
@@ -429,6 +459,35 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
 
     video_locks: dict[int, threading.Lock] = {}
     video_locks_guard = threading.Lock()
+
+    # ---------------- intensité d'amélioration rétroactive ----------------
+    enhance_job = {"running": False, "done": 0, "total": 0, "result": None, "error": None}
+
+    @app.get("/api/enhance/strength")
+    def enhance_strength_info():
+        n = lib.db.one("SELECT COUNT(*) n FROM photo WHERE ops LIKE '%\"autoenhance\"%'")["n"]
+        return {**enhance_job, "photos": n, "strength": config.settings.enhance_strength}
+
+    @app.post("/api/enhance/strength")
+    def enhance_strength_apply(payload: dict = Body(...)):
+        if enhance_job["running"]:
+            raise HTTPException(409, "déjà en cours")
+        strength = float(payload["strength"])
+
+        def run():
+            def prog(done, total):
+                enhance_job.update(done=done, total=total)
+            try:
+                enhance_job["result"] = lib.apply_enhance_strength(strength, prog)
+            except Exception as e:
+                log.exception("intensité d'amélioration : échec")
+                enhance_job["error"] = str(e)
+            finally:
+                enhance_job["running"] = False
+
+        enhance_job.update(running=True, done=0, total=0, result=None, error=None)
+        threading.Thread(target=run, name="enhance-strength", daemon=True).start()
+        return enhance_job
 
     # ---------------- WordPress ----------------
     def wp_fail(e: WPError):
@@ -521,6 +580,7 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
     @app.post("/api/photos/{pid}/render")
     def render_ops(pid: int, payload: dict = Body(...)):
         """Aperçu d'une liste d'opérations non enregistrée (outils de retouche)."""
+        aisvc.user_active()
         row = get_photo(pid)
         size = int(payload.get("size", 1200))
         img = render(lib.abs_path(row), payload.get("ops", []), size, config.settings.default_f35, row["f35"],
@@ -633,6 +693,37 @@ def create_app(config: Config, scan_on_start: bool = True) -> FastAPI:
         if not name:
             raise HTTPException(400, "nom vide")
         return {"id": aisvc.name_cluster(cid, name)}
+
+    @app.post("/api/faces/update")
+    def faces_update(payload: dict = Body(...)):
+        try:
+            return aisvc.update_faces([int(i) for i in payload.get("face_ids", [])], payload.get("action", ""),
+                                      payload.get("name"), payload.get("cluster"))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.get("/api/faces/names")
+    def face_names():
+        rows = lib.db.query("SELECT DISTINCT name FROM face_cluster WHERE name IS NOT NULL UNION "
+                            "SELECT name FROM tag WHERE kind='person'")
+        return sorted({r["name"] for r in rows}, key=str.lower)
+
+    @app.get("/api/faces/clusters/{cid}/faces")
+    def cluster_faces(cid: int, offset: int = 0, limit: int = Query(200, le=1000), sort: str = "date_desc"):
+        return aisvc.cluster_faces(cid, offset, limit, sort)
+
+    @app.get("/api/faces/clusters/{cid}/suggestions")
+    def cluster_suggestions(cid: int):
+        return aisvc.cluster_suggestions(cid)
+
+    @app.post("/api/faces/clusters/{cid}/merge")
+    def cluster_merge(cid: int, payload: dict = Body(...)):
+        return {"id": aisvc.merge_clusters(cid, [int(o) for o in payload.get("others", [])])}
+
+    @app.post("/api/faces/clusters/{cid}/reject")
+    def cluster_reject(cid: int, payload: dict = Body(...)):
+        aisvc.reject_suggestion(cid, int(payload["other"]))
+        return {"ok": True}
 
     @app.delete("/api/faces/clusters/{cid}")
     def delete_cluster(cid: int):

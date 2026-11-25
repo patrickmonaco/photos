@@ -442,6 +442,33 @@ class Library:
             out += self.db.query(f"SELECT * FROM photo WHERE id IN ({','.join('?' * len(chunk))})", tuple(chunk))
         return out
 
+    def apply_enhance_strength(self, strength: float, progress=None) -> dict:
+        """Nouvelle intensité d'amélioration, appliquée aussi aux photos déjà améliorées : celles
+        améliorées à la main (directive modifiée dans .phototheque.json) et celles dont l'amélioration
+        vient d'un filtre Picasa (recalculée avec le nouveau réglage). Les photos ne sont pas touchées ;
+        leurs vignettes sont recalculées à l'affichage."""
+        strength = round(max(0.0, min(1.5, float(strength))), 3)
+        self.config.settings.enhance_strength = strength
+        self.config.save()
+        ids = [r["id"] for r in self.db.query("SELECT id FROM photo WHERE ops LIKE '%\"autoenhance\"%'")]
+        groups = self._by_folder(ids)
+        done = 0
+        for (root, folder), rows in groups.items():
+            def update(photos, rows=rows):
+                for row in rows:
+                    entry = photos.get(row["filename"])
+                    if not entry or not isinstance(entry.get("ops"), list):
+                        continue
+                    for op in entry["ops"]:
+                        if isinstance(op, dict) and op.get("op") == "autoenhance":
+                            op["strength"] = strength
+            data = self.sidecars.update_folder(self.folder_path(rows[0]), update)
+            self._refresh_rows(rows, data["photos"])
+            done += len(rows)
+            if progress:
+                progress(done, len(ids))
+        return {"photos": len(ids), "strength": strength}
+
     def _by_folder(self, ids: list[int]) -> dict:
         groups: dict = {}
         for row in self.rows_for(ids):
